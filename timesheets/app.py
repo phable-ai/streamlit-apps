@@ -88,6 +88,18 @@ _DEFAULTS = {
 for _k, _v in _DEFAULTS.items():
     st.session_state.setdefault(_k, _v)
 
+# Streamlit dialogs can also be dismissed via their own built-in close button,
+# clicking outside them, or Escape -- none of which run any of our code, so a
+# flag below can go stale at True after its dialog closes. Opening a new
+# dialog always routes through here so a stale flag can never combine with a
+# freshly-opened one and trip Streamlit's "only one dialog at a time" error.
+_DIALOG_FLAGS = ["settings_open", "category_admin_open", "team_admin_open", "connections_open", "confirm_submit_open"]
+
+
+def open_dialog(flag_name: str) -> None:
+    for f in _DIALOG_FLAGS:
+        st.session_state[f] = (f == flag_name)
+
 data = st.session_state.data
 
 
@@ -416,7 +428,7 @@ with top_m:
 with top_r:
     c1, c2 = st.columns([1, 4])
     if c1.button("⚙", help="My working week"):
-        st.session_state.settings_open = True
+        open_dialog("settings_open")
         st.rerun()
     c2.markdown(
         f"""<div style="display:flex;align-items:center;gap:8px;height:100%;">
@@ -479,7 +491,7 @@ if active_tab == "My Time":
         wc1, wc2 = st.columns([4, 1])
         wc1.warning("Set your working week to get started — we'll use it to check your hours each week.")
         if wc2.button("Set working week"):
-            st.session_state.settings_open = True
+            open_dialog("settings_open")
             st.rerun()
 
     st.write("")
@@ -594,7 +606,7 @@ if active_tab == "My Time":
                 submit_week()
                 st.rerun()
             else:
-                st.session_state.confirm_submit_open = True
+                open_dialog("confirm_submit_open")
                 st.rerun()
     else:
         if btn_col.button("Edit", use_container_width=True):
@@ -675,14 +687,14 @@ elif active_tab == "My Team":
             st.session_state.current_week = lib.today_monday()
             st.rerun()
     if nav5.button("Manage team", use_container_width=True):
-        st.session_state.team_admin_open = True
+        open_dialog("team_admin_open")
         st.rerun()
     if nav6.button("Manage categories", use_container_width=True):
-        st.session_state.category_admin_open = True
+        open_dialog("category_admin_open")
         st.rerun()
     if st.session_state.is_admin:
         if st.button("Manage connections"):
-            st.session_state.connections_open = True
+            open_dialog("connections_open")
             st.rerun()
         st.caption("Demo note: this build has no real login/multi-user auth, so every visitor sees the admin view.")
 
