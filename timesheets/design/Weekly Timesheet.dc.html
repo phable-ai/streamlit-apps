@@ -1,0 +1,1410 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="true">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&amp;family=Space+Mono:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  a { color: oklch(0.54 0.19 350); text-decoration: none; }
+  a:hover { color: oklch(0.47 0.19 350); text-decoration: underline; }
+  @keyframes toastIn { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 0); } }
+</style>
+</helmet>
+<div style="min-height:100vh;background:oklch(0.985 0.004 60);font-family:'Public Sans',system-ui,-apple-system,sans-serif;color:oklch(0.24 0.01 55);padding:24px 20px 64px;">
+  <div style="max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:18px;">
+
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;" data-screen-label="App shell">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div style="width:38px;height:38px;border-radius:10px;background:oklch(0.54 0.19 350);color:white;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex-shrink:0;">WT</div>
+        <div style="font-size:18px;font-weight:700;">My Time</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;background:oklch(1 0 0);border:1px solid oklch(0.91 0.006 60);border-radius:10px;padding:4px;">
+        <sc-for list="{{ navTabs }}" as="tab" hint-placeholder-count="3">
+          <button onClick="{{ tab.onClick }}" style="{{ tab.style }}">
+            {{ tab.label }}
+            <sc-if value="{{ tab.showDot }}" hint-placeholder-val="{{ false }}">
+              <span style="{{ tab.dotStyle }}"></span>
+            </sc-if>
+          </button>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button onClick="{{ openSettings }}" title="My working week" style="width:36px;height:36px;border-radius:8px;border:1px solid oklch(0.91 0.006 60);background:oklch(1 0 0);cursor:pointer;font-size:15px;">⚙</button>
+        <div style="width:32px;height:32px;border-radius:50%;background:oklch(0.95 0.035 350);color:oklch(0.4 0.15 350);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12.5px;flex-shrink:0;">{{ userInitials }}</div>
+        <div style="font-size:13.5px;font-weight:600;">{{ userName }}</div>
+      </div>
+    </div>
+
+    <sc-if value="{{ isMineTab }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;flex-direction:column;gap:16px;" data-screen-label="My Timesheet">
+
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <button onClick="{{ goPrevWeek }}" style="width:32px;height:32px;border-radius:8px;border:1px solid oklch(0.91 0.006 60);background:oklch(1 0 0);cursor:pointer;font-size:14px;">‹</button>
+          <div style="font-size:15px;font-weight:700;min-width:150px;text-align:center;">{{ weekRangeLabel }}</div>
+          <button onClick="{{ goNextWeek }}" style="width:32px;height:32px;border-radius:8px;border:1px solid oklch(0.91 0.006 60);background:oklch(1 0 0);cursor:pointer;font-size:14px;">›</button>
+          <sc-if value="{{ showTodayButton }}" hint-placeholder-val="{{ false }}">
+            <button onClick="{{ goToday }}" style="padding:6px 12px;border:1px solid oklch(0.91 0.006 60);border-radius:8px;background:oklch(1 0 0);cursor:pointer;font-size:12.5px;font-weight:600;color:oklch(0.5 0.012 55);">Today</button>
+          </sc-if>
+          <div style="margin-left:auto;">
+            <span style="{{ statusPillStyle }}">{{ statusLabel }}</span>
+          </div>
+        </div>
+
+        <sc-if value="{{ needsWorkingWeekSetup }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 16px;background:oklch(0.96 0.03 90);border:1px solid oklch(0.88 0.05 90);border-radius:12px;">
+            <div style="flex:1;font-size:13.5px;color:oklch(0.4 0.09 80);">Set your working week to get started — we'll use it to check your hours each week.</div>
+            <button onClick="{{ openSettings }}" style="padding:8px 16px;border:none;border-radius:8px;background:oklch(0.54 0.19 350);color:white;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;">Set working week</button>
+          </div>
+        </sc-if>
+
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:14px 16px;background:oklch(1 0 0);border:1px solid oklch(0.91 0.006 60);border-radius:12px;">
+          <div style="font-family:'Space Mono',monospace;font-size:22px;font-weight:700;white-space:nowrap;">{{ weekTotalDisplay }}<span style="font-size:13px;color:oklch(0.55 0.01 55);font-weight:500;"> / {{ weekTargetDisplay }}h</span></div>
+          <div style="flex:1;min-width:120px;height:8px;background:oklch(0.965 0.004 60);border-radius:4px;overflow:hidden;">
+            <div style="{{ progressBarInnerStyle }}"></div>
+          </div>
+          <div style="font-size:13px;font-weight:600;color:oklch(0.5 0.012 55);white-space:nowrap;">{{ remainingLabel }}</div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <div style="position:relative;">
+            <button onClick="{{ toggleAddPicker }}" style="padding:9px 16px;border:1px solid oklch(0.91 0.006 60);border-radius:8px;background:oklch(1 0 0);cursor:pointer;font-size:13.5px;font-weight:700;color:oklch(0.24 0.01 55);">+ Add project</button>
+            <sc-if value="{{ addPickerOpen }}" hint-placeholder-val="{{ false }}">
+              <div onClick="{{ toggleAddPicker }}" style="position:fixed;inset:0;z-index:10;"></div>
+              <div onClick="{{ stopPropagation }}" style="position:absolute;top:calc(100% + 6px);left:0;width:280px;background:oklch(1 0 0);border:1px solid oklch(0.91 0.006 60);border-radius:10px;box-shadow:0 12px 32px oklch(0 0 0 / 0.15);z-index:20;padding:10px;max-height:320px;overflow-y:auto;">
+                <input type="text" value="{{ addPickerQuery }}" onChange="{{ setAddPickerQuery }}" placeholder="Search projects..." style="width:100%;padding:8px 10px;border:1px solid oklch(0.91 0.006 60);border-radius:7px;font-size:13px;margin-bottom:8px;box-sizing:border-box;outline:none;" style-focus="border-color:oklch(0.54 0.19 350);">
+                <sc-if value="{{ hasAddProjects }}" hint-placeholder-val="{{ true }}">
+                  <div style="font-size:11px;font-weight:700;color:oklch(0.55 0.01 55);text-transform:uppercase;letter-spacing:0.04em;padding:4px 6px;">Projects</div>
+                  <sc-for list="{{ addProjects }}" as="p" hint-placeholder-count="4">
+                    <button onClick="{{ p.onAdd }}" style="display:block;width:100%;text-align:left;padding:8px 8px;border:none;background:transparent;cursor:pointer;font-size:13.5px;border-radius:6px;" style-hover="background:oklch(0.985 0.004 60);">{{ p.name }}</button>
+                  </sc-for>
+                </sc-if>
+                <sc-if value="{{ hasAddCategories }}" hint-placeholder-val="{{ true }}">
+                  <div style="font-size:11px;font-weight:700;color:oklch(0.55 0.01 55);text-transform:uppercase;letter-spacing:0.04em;padding:8px 6px 4px;">Leave &amp; other</div>
+                  <sc-for list="{{ addCategories }}" as="c" hint-placeholder-count="3">
+                    <button onClick="{{ c.onAdd }}" style="display:block;width:100%;text-align:left;padding:8px 8px;border:none;background:transparent;cursor:pointer;font-size:13.5px;border-radius:6px;" style-hover="background:oklch(0.985 0.004 60);">{{ c.name }}</button>
+                  </sc-for>
+                </sc-if>
+                <sc-if value="{{ noAddMatches }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding:10px 6px;font-size:13px;color:oklch(0.55 0.01 55);">No matches.</div>
+                </sc-if>
+              </div>
+            </sc-if>
+          </div>
+          <button onClick="{{ copyLastWeek }}" style="padding:9px 16px;border:1px solid transparent;border-radius:8px;background:transparent;cursor:pointer;font-size:13.5px;font-weight:600;color:oklch(0.5 0.012 55);" style-hover="color:oklch(0.24 0.01 55);">Copy last week's projects</button>
+          <button onClick="{{ fillRemaining }}" disabled="{{ fillRemainingDisabled }}" style="{{ fillRemainingButtonStyle }}">Fill remaining hours</button>
+        </div>
+
+        <div style="border:1px solid oklch(0.91 0.006 60);border-radius:12px;background:oklch(1 0 0);">
+          <sc-if value="{{ isWide }}" hint-placeholder-val="{{ true }}">
+            <div style="overflow-x:auto;">
+              <div style="min-width:760px;">
+                <div style="display:grid;grid-template-columns:minmax(160px,1fr) repeat(7,72px) 64px 28px;border-bottom:1px solid oklch(0.91 0.006 60);">
+                  <div style="padding:10px 14px;font-size:11.5px;font-weight:700;color:oklch(0.55 0.01 55);text-transform:uppercase;letter-spacing:0.04em;">Project</div>
+                  <sc-for list="{{ dayHeaders }}" as="dh" hint-placeholder-count="7">
+                    <div style="{{ dh.style }}">
+                      <div style="font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;">{{ dh.label }}</div>
+                      <div style="font-size:11px;margin-top:1px;">{{ dh.dateLabel }}</div>
+                    </div>
+                  </sc-for>
+                  <div style="padding:10px 8px;font-size:11.5px;font-weight:700;color:oklch(0.55 0.01 55);text-align:right;text-transform:uppercase;letter-spacing:0.04em;">Total</div>
+                  <div></div>
+                </div>
+
+                <sc-if value="{{ hasRows }}" hint-placeholder-val="{{ true }}">
+                  <sc-for list="{{ rows }}" as="row" hint-placeholder-count="3">
+                    <div style="display:grid;grid-template-columns:minmax(160px,1fr) repeat(7,72px) 64px 28px;align-items:center;border-bottom:1px solid oklch(0.94 0.004 60);" style-hover="background:oklch(0.99 0.002 60);">
+                      <div style="padding:8px 14px;display:flex;align-items:center;gap:6px;min-width:0;">
+                        <div style="flex:1;font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ row.name }}</div>
+                        <sc-if value="{{ row.canFillSame }}" hint-placeholder-val="{{ true }}">
+                          <button onClick="{{ row.onFillSame }}" title="Apply first day's hours to all active days" style="flex-shrink:0;border:none;background:transparent;cursor:pointer;font-size:10px;font-weight:700;color:oklch(0.55 0.01 55);text-transform:uppercase;letter-spacing:0.03em;padding:2px 4px;" style-hover="color:oklch(0.24 0.01 55);">Even</button>
+                        </sc-if>
+                      </div>
+                      <sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="7">
+                        <div style="padding:5px 4px;">
+                          <input type="number" id="{{ cell.id }}" value="{{ cell.display }}" onChange="{{ cell.onChange }}" onKeyDown="{{ cell.onKeyDown }}" disabled="{{ cell.disabled }}" onFocus="{{ selectAllOnFocus }}" min="0" max="24" step="{{ stepValue }}" style="{{ cell.style }}" style-focus="border-color:oklch(0.54 0.19 350);box-shadow:0 0 0 2px oklch(0.95 0.035 350);">
+                        </div>
+                      </sc-for>
+                      <div style="padding:8px 8px;text-align:right;font-family:'Space Mono',monospace;font-size:13px;font-weight:700;">{{ row.totalDisplay }}</div>
+                      <div style="display:flex;align-items:center;justify-content:center;">
+                        <sc-if value="{{ row.canRemove }}" hint-placeholder-val="{{ true }}">
+                          <button onClick="{{ row.onRemove }}" style="border:none;background:transparent;cursor:pointer;color:oklch(0.55 0.01 55);font-size:15px;line-height:1;padding:4px;" style-hover="color:oklch(0.48 0.18 25);">×</button>
+                        </sc-if>
+                      </div>
+                    </div>
+                  </sc-for>
+                </sc-if>
+                <sc-if value="{{ noRows }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding:28px 14px;text-align:center;color:oklch(0.55 0.01 55);font-size:13.5px;">No projects added yet. Add one above to get started.</div>
+                </sc-if>
+
+                <div style="display:grid;grid-template-columns:minmax(160px,1fr) repeat(7,72px) 64px 28px;align-items:center;background:oklch(0.985 0.004 60);">
+                  <div style="padding:10px 14px;font-size:12.5px;font-weight:700;color:oklch(0.5 0.012 55);">Total</div>
+                  <sc-for list="{{ footerDays }}" as="fd" hint-placeholder-count="7">
+                    <div style="padding:5px 4px;">
+                      <div style="{{ fd.style }}">{{ fd.display }}</div>
+                    </div>
+                  </sc-for>
+                  <div style="padding:10px 8px;text-align:right;font-family:'Space Mono',monospace;font-size:13.5px;font-weight:800;">{{ weekTotalDisplay }}/{{ weekTargetDisplay }}</div>
+                  <div></div>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ isNarrow }}" hint-placeholder-val="{{ false }}">
+            <sc-if value="{{ hasRows }}" hint-placeholder-val="{{ true }}">
+              <sc-for list="{{ rows }}" as="row" hint-placeholder-count="3">
+                <div style="border-bottom:1px solid oklch(0.94 0.004 60);padding:12px 14px;" style-hover="background:oklch(0.99 0.002 60);">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                    <div style="flex:1;font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ row.name }}</div>
+                    <sc-if value="{{ row.canFillSame }}" hint-placeholder-val="{{ true }}">
+                      <button onClick="{{ row.onFillSame }}" style="flex-shrink:0;border:none;background:transparent;cursor:pointer;font-size:10px;font-weight:700;color:oklch(0.55 0.01 55);text-transform:uppercase;letter-spacing:0.03em;padding:2px 4px;">Even</button>
+                    </sc-if>
+                    <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;">{{ row.totalDisplay }}h</div>
+                    <sc-if value="{{ row.canRemove }}" hint-placeholder-val="{{ true }}">
+                      <button onClick="{{ row.onRemove }}" style="border:none;background:transparent;cursor:pointer;color:oklch(0.55 0.01 55);font-size:16px;line-height:1;padding:2px 4px;" style-hover="color:oklch(0.48 0.18 25);">×</button>
+                    </sc-if>
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:6px;">
+                    <sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="7">
+                      <div style="display:flex;align-items:center;gap:10px;">
+                        <div style="width:70px;font-size:12.5px;color:oklch(0.5 0.012 55);flex-shrink:0;">{{ cell.label }} {{ cell.dateLabel }}</div>
+                        <input type="number" id="{{ cell.id }}-m" value="{{ cell.display }}" onChange="{{ cell.onChange }}" disabled="{{ cell.disabled }}" onFocus="{{ selectAllOnFocus }}" min="0" max="24" step="{{ stepValue }}" style="{{ cell.mobileStyle }}" style-focus="border-color:oklch(0.54 0.19 350);box-shadow:0 0 0 2px oklch(0.95 0.035 350);">
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-for>
+            </sc-if>
+            <sc-if value="{{ noRows }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:28px 14px;text-align:center;color:oklch(0.55 0.01 55);font-size:13.5px;">No projects added yet. Add one above to get started.</div>
+            </sc-if>
+          </sc-if>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <label style="font-size:12.5px;font-weight:600;color:oklch(0.5 0.012 55);">Anything we should know? (optional)</label>
+          <textarea value="{{ weekNoteValue }}" onChange="{{ setWeekNote }}" disabled="{{ weekNoteDisabled }}" placeholder="e.g. out sick Wednesday afternoon, conference travel..." rows="2" style="{{ weekNoteStyle }}"></textarea>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;">
+          <div style="font-size:13px;color:oklch(0.5 0.012 55);">{{ submitHelperText }}</div>
+          <div style="display:flex;gap:10px;">
+            <sc-if value="{{ showSubmitButton }}" hint-placeholder-val="{{ true }}">
+              <button onClick="{{ onSubmit }}" disabled="{{ submitDisabled }}" style="{{ submitButtonStyle }}">Submit for approval</button>
+            </sc-if>
+            <sc-if value="{{ showEditButton }}" hint-placeholder-val="{{ false }}">
+              <button onClick="{{ onEdit }}" style="padding:11px 22px;border:1px solid oklch(0.91 0.006 60);border-radius:9px;background:oklch(1 0 0);color:oklch(0.24 0.01 55);font-size:14px;font-weight:700;cursor:pointer;">Edit</button>
+            </sc-if>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isTeamTab }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;flex-direction:column;gap:16px;" data-screen-label="Team">
+
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <button onClick="{{ goPrevWeek }}" style="width:32px;height:32px;border-radius:8px;border:1px solid oklch(0.91 0.006 60);background:oklch(1 0 0);cursor:pointer;font-size:14px;">‹</button>
+          <div style="font-size:15px;font-weight:700;min-width:150px;text-align:center;">{{ weekRangeLabel }}</div>
+          <button onClick="{{ goNextWeek }}" style="width:32px;height:32px;border-radius:8px;border:1px solid oklch(0.91 0.006 60);background:oklch(1 0 0);cursor:pointer;font-size:14px;">›</button>
+          <sc-if value="{{ showTodayButton }}" hint-placeholder-val="{{ false }}">
+            <button onClick="{{ goToday }}" style="padding:6px 12px;border:1px solid oklch(0.91 0.006 60);border-radius:8px;background:oklch(1 0 0);cursor:pointer;font-size:12.5px;font-weight:600;color:oklch(0.5 0.012 55);">Today</button>
+          </sc-if>
+          <button onClick="{{ openTeamAdmin }}" style="margin-left:auto;padding:7px 14px;border:1px solid oklch(0.91 0.006 60);border-radius:8px;background:oklch(1 0 0);cursor:pointer;font-size:12.5px;font-weight:600;color:oklch(0.5 0.012 55);">Manage team</button>
+          <button onClick="{{ openCategoryAdmin }}" style="padding:7px 14px;border:1px solid oklch(0.91 0.006 60);border-radius:8px;background:oklch(1 0 0);cursor:pointer;font-size:12.5px;font-weight:600;color:oklch(0.5 0.012 55);">Manage categories</button>
+          <sc-if value="{{ isAdmin }}" hint-placeholder-val="{{ true }}">
+            <button onClick="{{ openConnections }}" style="padding:7px 14px;border:1px solid oklch(0.91 0.006 60);border-radius:8px;background:oklch(1 0 0);cursor:pointer;font-size:12.5px;font-weight:600;color:oklch(0.5 0.012 55);">Manage connections</button>
+          </sc-if>
+        </div>
+
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:140px;padding:14px 16px;background:oklch(1 0 0);border:1px solid oklch(0.91 0.006 60);border-radius:12px;">
+            <div style="font-size:22px;font-weight:800;font-family:'Space Mono',monospace;">{{ teamStats.submittedCount }}/{{ teamStats.totalOthers }}</div>
+            <div style="font-size:12.5px;color:oklch(0.5 0.012 55);margin-top:2px;">Submitted</div>
+          </div>
+          <div style="flex:1;min-width:140px;padding:14px 16px;background:oklch(1 0 0);border:1px solid oklch(0.91 0.006 60);border-radius:12px;">
+            <div style="font-size:22px;font-weight:800;font-family:'Space Mono',monospace;">{{ teamStats.hoursLoggedDisplay }}/{{ teamStats.hoursTargetDisplay }}</div>
+            <div style="font-size:12.5px;color:oklch(0.5 0.012 55);margin-top:2px;">Hours logged</div>
+          </div>
+        </div>
+
+        <div style="background:oklch(1 0 0);border:1px solid oklch(0.91 0.006 60);border-radius:12px;overflow:hidden;">
+          <sc-for list="{{ members }}" as="member" hint-placeholder-count="5">
+            <div style="border-bottom:1px solid oklch(0.94 0.004 60);">
+              <div onClick="{{ member.onToggleExpand }}" style="display:flex;align-items:center;gap:12px;padding:12px 16px;cursor:pointer;flex-wrap:wrap;">
+                <div style="{{ member.avatarStyle }}">{{ member.initials }}</div>
+                <div style="font-size:14px;font-weight:600;min-width:130px;">{{ member.name }}</div>
+                <span style="{{ member.statusPillStyle }}">{{ member.statusLabel }}</span>
+                <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;margin-left:auto;">{{ member.totalDisplay }}/{{ member.targetDisplay }}h</div>
+                <div style="font-size:12px;color:oklch(0.55 0.01 55);min-width:140px;text-align:right;">{{ member.submittedAtLabel }}</div>
+              </div>
+              <sc-if value="{{ member.expanded }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:2px 16px 14px 58px;display:flex;flex-direction:column;gap:6px;">
+                  <sc-for list="{{ member.rowsView }}" as="mrow" hint-placeholder-count="2">
+                    <div style="display:flex;align-items:baseline;gap:10px;font-size:12.5px;flex-wrap:wrap;">
+                      <div style="font-weight:700;min-width:150px;">{{ mrow.name }}</div>
+                      <div style="color:oklch(0.5 0.012 55);flex:1;">{{ mrow.compactBreakdown }}</div>
+                      <div style="font-family:'Space Mono',monospace;font-weight:700;">{{ mrow.totalDisplay }}h</div>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="background:oklch(1 0 0);border:1px solid oklch(0.91 0.006 60);border-radius:12px;padding:16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+            <div style="font-size:12.5px;font-weight:700;color:oklch(0.5 0.012 55);text-transform:uppercase;letter-spacing:0.03em;">Team time by project</div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <div style="display:flex;align-items:center;gap:4px;background:oklch(0.985 0.004 60);border:1px solid oklch(0.91 0.006 60);border-radius:9px;padding:4px;">
+                <sc-for list="{{ teamPeriodOptions }}" as="opt" hint-placeholder-count="4">
+                  <button onClick="{{ opt.onClick }}" style="{{ opt.style }}">{{ opt.label }}</button>
+                </sc-for>
+              </div>
+              <div style="display:flex;align-items:center;gap:4px;background:oklch(0.985 0.004 60);border:1px solid oklch(0.91 0.006 60);border-radius:9px;padding:4px;">
+                <sc-for list="{{ teamScopeOptions }}" as="opt" hint-placeholder-count="3">
+                  <button onClick="{{ opt.onClick }}" style="{{ opt.style }}">{{ opt.label }}</button>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+          <sc-if value="{{ hasTeamDashBreakdown }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;flex-direction:column;gap:12px;">
+              <sc-for list="{{ teamDashBreakdown }}" as="b" hint-placeholder-count="5">
+                <div>
+                  <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px;">
+                    <div style="font-weight:600;">{{ b.name }}</div>
+                    <div style="font-family:'Space Mono',monospace;font-weight:700;color:oklch(0.5 0.012 55);">{{ b.hoursDisplay }}h · {{ b.pct }}%</div>
+                  </div>
+                  <div style="height:8px;background:oklch(0.965 0.004 60);border-radius:4px;overflow:hidden;">
+                    <div style="{{ b.barStyle }}"></div>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ noTeamDashBreakdown }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:20px 0;text-align:center;color:oklch(0.55 0.01 55);font-size:13.5px;">No hours logged in this period.</div>
+          </sc-if>
+        </div>
+
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isHistoryTab }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;flex-direction:column;gap:16px;" data-screen-label="History">
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+          <div style="display:flex;align-items:center;gap:4px;background:oklch(1 0 0);border:1px solid oklch(0.91 0.006 60);border-radius:9px;padding:4px;">
+            <sc-for list="{{ periodOptions }}" as="opt" hint-placeholder-count="4">
+              <button onClick="{{ opt.onClick }}" style="{{ opt.style }}">{{ opt.label }}</button>
+            </sc-for>
+          </div>
+          <div style="display:flex;align-items:center;gap:4px;background:oklch(1 0 0);border:1px solid oklch(0.91 0.006 60);border-radius:9px;padding:4px;">
+            <sc-for list="{{ scopeOptions }}" as="opt" hint-placeholder-count="3">
+              <button onClick="{{ opt.onClick }}" style="{{ opt.style }}">{{ opt.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:140px;padding:14px 16px;background:oklch(1 0 0);border:1px solid oklch(0.91 0.006 60);border-radius:12px;">
+            <div style="font-size:22px;font-weight:800;font-family:'Space Mono',monospace;">{{ dashTotalHoursDisplay }}h</div>
+            <div style="font-size:12.5px;color:oklch(0.5 0.012 55);margin-top:2px;">Total logged</div>
+          </div>
+          <div style="flex:1;min-width:140px;padding:14px 16px;background:oklch(1 0 0);border:1px solid oklch(0.91 0.006 60);border-radius:12px;">
+            <div style="font-size:22px;font-weight:800;font-family:'Space Mono',monospace;">{{ dashAvgPerWeekDisplay }}h</div>
+            <div style="font-size:12.5px;color:oklch(0.5 0.012 55);margin-top:2px;">Avg per week</div>
+          </div>
+          <div style="flex:1;min-width:140px;padding:14px 16px;background:oklch(1 0 0);border:1px solid oklch(0.91 0.006 60);border-radius:12px;">
+            <div style="font-size:22px;font-weight:800;font-family:'Space Mono',monospace;">{{ dashWeeksSubmitted }}/{{ dashWeeksInRange }}</div>
+            <div style="font-size:12.5px;color:oklch(0.5 0.012 55);margin-top:2px;">Weeks submitted</div>
+            <sc-if value="{{ hasDashNotSubmitted }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size:11.5px;color:oklch(0.48 0.18 25);font-weight:700;margin-top:3px;">{{ dashNotSubmitted }} not submitted</div>
+            </sc-if>
+          </div>
+        </div>
+
+        <div style="background:oklch(1 0 0);border:1px solid oklch(0.91 0.006 60);border-radius:12px;padding:16px;">
+          <div style="font-size:12.5px;font-weight:700;color:oklch(0.5 0.012 55);text-transform:uppercase;letter-spacing:0.03em;margin-bottom:12px;">Where your time went</div>
+          <sc-if value="{{ hasDashBreakdown }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;flex-direction:column;gap:12px;">
+              <sc-for list="{{ dashBreakdown }}" as="b" hint-placeholder-count="5">
+                <div>
+                  <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px;">
+                    <div style="font-weight:600;">{{ b.name }}</div>
+                    <div style="font-family:'Space Mono',monospace;font-weight:700;color:oklch(0.5 0.012 55);">{{ b.hoursDisplay }}h · {{ b.pct }}%</div>
+                  </div>
+                  <div style="height:8px;background:oklch(0.965 0.004 60);border-radius:4px;overflow:hidden;">
+                    <div style="{{ b.barStyle }}"></div>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ noDashBreakdown }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:20px 0;text-align:center;color:oklch(0.55 0.01 55);font-size:13.5px;">No hours logged in this period.</div>
+          </sc-if>
+        </div>
+
+        <div style="height:1px;background:oklch(0.93 0.006 60);"></div>
+
+        <div style="font-size:13px;color:oklch(0.5 0.012 55);">Past weeks you've logged. Select one to view or edit it.</div>
+        <div style="background:oklch(1 0 0);border:1px solid oklch(0.91 0.006 60);border-radius:12px;overflow:hidden;">
+          <sc-if value="{{ hasHistory }}" hint-placeholder-val="{{ true }}">
+            <sc-for list="{{ historyRows }}" as="hrow" hint-placeholder-count="4">
+              <div onClick="{{ hrow.onOpen }}" style="display:flex;align-items:center;gap:14px;padding:14px 16px;cursor:pointer;border-bottom:1px solid oklch(0.94 0.004 60);flex-wrap:wrap;" style-hover="background:oklch(0.99 0.002 60);">
+                <div style="font-size:14px;font-weight:700;min-width:160px;">{{ hrow.rangeLabel }}</div>
+                <sc-if value="{{ hrow.hasNote }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size:11.5px;color:oklch(0.55 0.01 55);font-style:italic;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ hrow.noteSnippet }}</div>
+                </sc-if>
+                <span style="{{ hrow.statusPillStyle }}">{{ hrow.statusLabel }}</span>
+                <sc-if value="{{ hrow.isCurrentWeek }}" hint-placeholder-val="{{ false }}">
+                  <span style="font-size:11px;color:oklch(0.55 0.01 55);font-weight:600;">current</span>
+                </sc-if>
+                <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;margin-left:auto;">{{ hrow.totalDisplay }}/{{ hrow.targetDisplay }}h</div>
+                <div style="font-size:12px;color:oklch(0.55 0.01 55);min-width:160px;text-align:right;">{{ hrow.submittedAtLabel }}</div>
+              </div>
+            </sc-for>
+          </sc-if>
+          <sc-if value="{{ noHistory }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:28px 14px;text-align:center;color:oklch(0.55 0.01 55);font-size:13.5px;">No timesheet history yet.</div>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ settingsOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ closeSettings }}" style="position:fixed;inset:0;background:oklch(0 0 0 / 0.35);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px;">
+        <div onClick="{{ stopPropagation }}" data-screen-label="Working week settings" style="background:oklch(1 0 0);border-radius:14px;padding:24px;max-width:420px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px oklch(0 0 0 / 0.25);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+            <div style="font-size:16px;font-weight:700;">My working week</div>
+            <button onClick="{{ closeSettings }}" style="border:none;background:transparent;font-size:18px;cursor:pointer;color:oklch(0.55 0.01 55);line-height:1;">×</button>
+          </div>
+          <div style="font-size:13px;color:oklch(0.5 0.012 55);margin-bottom:16px;">Used to check each day adds up before you submit. Saved automatically.</div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <sc-for list="{{ workingDaysView }}" as="day" hint-placeholder-count="7">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <button type="button" role="switch" aria-checked="{{ day.active }}" aria-label="{{ day.label }}" style="{{ day.trackStyle }}" onClick="{{ day.onToggle }}">
+                  <div style="{{ day.knobStyle }}"></div>
+                </button>
+                <div style="flex:1;font-size:14px;font-weight:500;">{{ day.label }}</div>
+                <input type="number" value="{{ day.hoursDisplay }}" onChange="{{ day.onHours }}" disabled="{{ day.hoursDisabled }}" min="0" max="24" step="0.5" style="width:56px;padding:6px 8px;border:1px solid oklch(0.91 0.006 60);border-radius:6px;font-family:'Space Mono',monospace;font-size:13px;text-align:center;outline:none;" style-focus="border-color:oklch(0.54 0.19 350);">
+                <div style="font-size:12px;color:oklch(0.55 0.01 55);width:10px;">h</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="height:1px;background:oklch(0.93 0.006 60);margin:20px 0;"></div>
+          <div style="font-size:14px;font-weight:700;margin-bottom:2px;">My projects</div>
+          <div style="font-size:12.5px;color:oklch(0.55 0.01 55);margin-bottom:10px;">Choose which ADO projects appear in your Add project list \u2014 {{ enabledProjectCount }} enabled.</div>
+          <input type="text" value="{{ projectAdminQuery }}" onChange="{{ setProjectAdminQuery }}" placeholder="Search ADO projects..." style="width:100%;padding:8px 10px;border:1px solid oklch(0.91 0.006 60);border-radius:7px;font-size:13px;margin-bottom:10px;box-sizing:border-box;outline:none;" style-focus="border-color:oklch(0.54 0.19 350);">
+          <div style="display:flex;flex-direction:column;gap:10px;max-height:216px;overflow-y:auto;">
+            <sc-for list="{{ projectToggles }}" as="proj" hint-placeholder-count="5">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <button type="button" role="switch" aria-checked="{{ proj.enabled }}" aria-label="{{ proj.name }}" style="{{ proj.trackStyle }}" onClick="{{ proj.onToggle }}">
+                  <div style="{{ proj.knobStyle }}"></div>
+                </button>
+                <div style="flex:1;font-size:13.5px;font-weight:500;">{{ proj.name }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <sc-if value="{{ hasHiddenProjects }}" hint-placeholder-val="{{ false }}">
+            <div style="font-size:12px;color:oklch(0.55 0.01 55);margin-top:8px;">+{{ projectListHiddenCount }} more \u2014 keep typing to find them.</div>
+          </sc-if>
+
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:18px;">
+            <button onClick="{{ applyStandardHoursToAll }}" style="border:none;background:transparent;color:oklch(0.54 0.19 350);font-size:13px;font-weight:600;cursor:pointer;padding:0;">Set all active days to 7.5h</button>
+            <button onClick="{{ closeSettings }}" style="padding:9px 20px;border:none;border-radius:8px;background:oklch(0.54 0.19 350);color:white;font-size:13.5px;font-weight:700;cursor:pointer;">Done</button>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ confirmSubmitOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ cancelConfirmSubmit }}" style="position:fixed;inset:0;background:oklch(0 0 0 / 0.35);display:flex;align-items:center;justify-content:center;z-index:55;padding:20px;">
+        <div onClick="{{ stopPropagation }}" data-screen-label="Submit confirmation" style="background:oklch(1 0 0);border-radius:14px;padding:24px;max-width:420px;width:100%;box-shadow:0 20px 60px oklch(0 0 0 / 0.25);">
+          <div style="font-size:16px;font-weight:700;margin-bottom:10px;">Check before you submit</div>
+          <sc-if value="{{ isFutureWeek }}" hint-placeholder-val="{{ false }}">
+            <div style="font-size:13px;background:oklch(0.96 0.03 90);color:oklch(0.4 0.09 80);border-radius:8px;padding:10px 12px;margin-bottom:12px;">This is a future week ({{ weekRangeLabel }}). You're submitting hours ahead of time.</div>
+          </sc-if>
+          <sc-if value="{{ hasMismatch }}" hint-placeholder-val="{{ false }}">
+            <div style="font-size:13.5px;color:oklch(0.5 0.012 55);margin-bottom:14px;">You can still submit, but check these days first:</div>
+            <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:20px;">
+              <sc-for list="{{ confirmSubmitLines }}" as="line" hint-placeholder-count="2">
+                <div style="display:flex;justify-content:space-between;font-size:13px;padding:9px 12px;background:oklch(0.97 0.008 60);border-radius:8px;">
+                  <div style="font-weight:700;">{{ line.label }}</div>
+                  <div style="font-family:'Space Mono',monospace;">{{ line.detail }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <div style="display:flex;justify-content:flex-end;gap:10px;">
+            <button onClick="{{ cancelConfirmSubmit }}" style="padding:9px 18px;border:1px solid oklch(0.91 0.006 60);border-radius:8px;background:oklch(1 0 0);color:oklch(0.24 0.01 55);font-size:13.5px;font-weight:700;cursor:pointer;">Go back</button>
+            <button onClick="{{ confirmSubmitAnyway }}" style="padding:9px 18px;border:none;border-radius:8px;background:oklch(0.54 0.19 350);color:white;font-size:13.5px;font-weight:700;cursor:pointer;">Submit anyway</button>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ categoryAdminOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ closeCategoryAdmin }}" style="position:fixed;inset:0;background:oklch(0 0 0 / 0.35);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px;">
+        <div onClick="{{ stopPropagation }}" data-screen-label="Manage categories" style="background:oklch(1 0 0);border-radius:14px;padding:24px;max-width:420px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px oklch(0 0 0 / 0.25);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+            <div style="font-size:16px;font-weight:700;">Non-project time categories</div>
+            <button onClick="{{ closeCategoryAdmin }}" style="border:none;background:transparent;font-size:18px;cursor:pointer;color:oklch(0.55 0.01 55);line-height:1;">×</button>
+          </div>
+          <div style="font-size:13px;color:oklch(0.5 0.012 55);margin-bottom:16px;">These appear alongside projects in everyone's Add picker.</div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <sc-for list="{{ categoryAdminRows }}" as="cat" hint-placeholder-count="5">
+              <div style="display:flex;align-items:center;gap:10px;">
+                <div style="flex:1;font-size:13.5px;font-weight:500;padding:8px 10px;background:oklch(0.97 0.006 60);border-radius:7px;">{{ cat.name }}</div>
+                <button onClick="{{ cat.onRemove }}" style="border:none;background:transparent;cursor:pointer;color:oklch(0.55 0.01 55);font-size:15px;line-height:1;padding:4px;" style-hover="color:oklch(0.48 0.18 25);">×</button>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:14px;">
+            <input type="text" value="{{ newCategoryName }}" onChange="{{ setNewCategoryName }}" placeholder="New category name..." style="flex:1;padding:9px 10px;border:1px solid oklch(0.91 0.006 60);border-radius:7px;font-size:13px;box-sizing:border-box;outline:none;" style-focus="border-color:oklch(0.54 0.19 350);">
+            <button onClick="{{ addCategory }}" disabled="{{ addCategoryDisabled }}" style="{{ addCategoryButtonStyle }}">Add</button>
+          </div>
+          <div style="display:flex;justify-content:flex-end;margin-top:18px;">
+            <button onClick="{{ closeCategoryAdmin }}" style="padding:9px 20px;border:none;border-radius:8px;background:oklch(0.54 0.19 350);color:white;font-size:13.5px;font-weight:700;cursor:pointer;">Done</button>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ teamAdminOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ closeTeamAdmin }}" style="position:fixed;inset:0;background:oklch(0 0 0 / 0.35);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px;">
+        <div onClick="{{ stopPropagation }}" data-screen-label="Manage team" style="background:oklch(1 0 0);border-radius:14px;padding:24px;max-width:420px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px oklch(0 0 0 / 0.25);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+            <div style="font-size:16px;font-weight:700;">Team members</div>
+            <button onClick="{{ closeTeamAdmin }}" style="border:none;background:transparent;font-size:18px;cursor:pointer;color:oklch(0.55 0.01 55);line-height:1;">×</button>
+          </div>
+          <div style="font-size:13px;color:oklch(0.5 0.012 55);margin-bottom:16px;">People who show up in your Team rollup.</div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <sc-for list="{{ teamAdminRows }}" as="mem" hint-placeholder-count="4">
+              <div style="display:flex;align-items:center;gap:10px;">
+                <div style="flex:1;font-size:13.5px;font-weight:500;padding:8px 10px;background:oklch(0.97 0.006 60);border-radius:7px;">{{ mem.name }}</div>
+                <button onClick="{{ mem.onRemove }}" style="border:none;background:transparent;cursor:pointer;color:oklch(0.55 0.01 55);font-size:15px;line-height:1;padding:4px;" style-hover="color:oklch(0.48 0.18 25);">×</button>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:14px;">
+            <input type="text" value="{{ newMemberName }}" onChange="{{ setNewMemberName }}" placeholder="New team member name..." style="flex:1;padding:9px 10px;border:1px solid oklch(0.91 0.006 60);border-radius:7px;font-size:13px;box-sizing:border-box;outline:none;" style-focus="border-color:oklch(0.54 0.19 350);">
+            <button onClick="{{ addTeamMember }}" disabled="{{ addMemberDisabled }}" style="{{ addMemberButtonStyle }}">Add</button>
+          </div>
+          <div style="display:flex;justify-content:flex-end;margin-top:18px;">
+            <button onClick="{{ closeTeamAdmin }}" style="padding:9px 20px;border:none;border-radius:8px;background:oklch(0.54 0.19 350);color:white;font-size:13.5px;font-weight:700;cursor:pointer;">Done</button>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ connectionsOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ closeConnections }}" style="position:fixed;inset:0;background:oklch(0 0 0 / 0.35);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px;">
+        <div onClick="{{ stopPropagation }}" data-screen-label="Manage connections" style="background:oklch(1 0 0);border-radius:14px;padding:24px;max-width:460px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px oklch(0 0 0 / 0.25);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+            <div style="font-size:16px;font-weight:700;">Manage connections</div>
+            <button onClick="{{ closeConnections }}" style="border:none;background:transparent;font-size:18px;cursor:pointer;color:oklch(0.55 0.01 55);line-height:1;">×</button>
+          </div>
+          <div style="font-size:13px;color:oklch(0.5 0.012 55);margin-bottom:18px;">Admin only. Connect Azure DevOps and choose where timesheet data is stored.</div>
+
+          <div style="font-size:11.5px;font-weight:700;color:oklch(0.55 0.01 55);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:10px;">Azure DevOps</div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              <label style="font-size:12.5px;font-weight:600;color:oklch(0.5 0.012 55);">Organization URL</label>
+              <input type="text" value="{{ adoOrgUrl }}" onChange="{{ setAdoOrgUrl }}" placeholder="https://dev.azure.com/yourorg" style="width:100%;padding:9px 10px;border:1px solid oklch(0.91 0.006 60);border-radius:7px;font-size:13px;box-sizing:border-box;outline:none;" style-focus="border-color:oklch(0.54 0.19 350);">
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              <label style="font-size:12.5px;font-weight:600;color:oklch(0.5 0.012 55);">Project name</label>
+              <input type="text" value="{{ adoProjectName }}" onChange="{{ setAdoProjectName }}" placeholder="e.g. Platform" style="width:100%;padding:9px 10px;border:1px solid oklch(0.91 0.006 60);border-radius:7px;font-size:13px;box-sizing:border-box;outline:none;" style-focus="border-color:oklch(0.54 0.19 350);">
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              <label style="font-size:12.5px;font-weight:600;color:oklch(0.5 0.012 55);">Personal access token</label>
+              <input type="password" value="{{ adoPat }}" onChange="{{ setAdoPat }}" placeholder="Paste PAT" style="width:100%;padding:9px 10px;border:1px solid oklch(0.91 0.006 60);border-radius:7px;font-size:13px;box-sizing:border-box;outline:none;" style-focus="border-color:oklch(0.54 0.19 350);">
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;">
+            <span style="{{ adoStatusPillStyle }}">{{ adoStatusLabel }}</span>
+            <button onClick="{{ testAdoConnection }}" disabled="{{ testAdoDisabled }}" style="{{ testAdoButtonStyle }}">Test connection</button>
+          </div>
+
+          <div style="height:1px;background:oklch(0.93 0.006 60);margin:20px 0;"></div>
+
+          <div style="font-size:11.5px;font-weight:700;color:oklch(0.55 0.01 55);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:10px;">Data storage</div>
+          <div style="font-size:12.5px;color:oklch(0.5 0.012 55);margin-bottom:10px;">Where submitted timesheet entries are written.</div>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px;">
+            <sc-for list="{{ storageProviderOptions }}" as="opt" hint-placeholder-count="3">
+              <button onClick="{{ opt.onClick }}" style="{{ opt.style }}">{{ opt.label }}</button>
+            </sc-for>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <label style="font-size:12.5px;font-weight:600;color:oklch(0.5 0.012 55);">{{ storageTargetLabel }}</label>
+            <input type="text" value="{{ storageTarget }}" onChange="{{ setStorageTarget }}" placeholder="{{ storageTargetPlaceholder }}" style="width:100%;padding:9px 10px;border:1px solid oklch(0.91 0.006 60);border-radius:7px;font-size:13px;box-sizing:border-box;outline:none;" style-focus="border-color:oklch(0.54 0.19 350);">
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px;">
+            <button onClick="{{ closeConnections }}" style="padding:9px 18px;border:1px solid oklch(0.91 0.006 60);border-radius:8px;background:oklch(1 0 0);color:oklch(0.24 0.01 55);font-size:13.5px;font-weight:700;cursor:pointer;">Cancel</button>
+            <button onClick="{{ saveConnections }}" style="padding:9px 20px;border:none;border-radius:8px;background:oklch(0.54 0.19 350);color:white;font-size:13.5px;font-weight:700;cursor:pointer;">Save</button>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+      <div style="position:fixed;bottom:24px;left:50%;transform:translate(-50%,0);background:oklch(0.24 0.01 55);color:white;padding:11px 20px;border-radius:100px;font-size:13.5px;font-weight:600;box-shadow:0 8px 24px oklch(0 0 0 / 0.25);animation:toastIn .2s ease-out;z-index:60;">{{ toast }}</div>
+    </sc-if>
+
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;showTeamTab&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Behavior&quot;},
+  &quot;requireExactMatch&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Behavior&quot;},
+  &quot;timeIncrement&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;default&quot;: &quot;half&quot;, &quot;tsType&quot;: &quot;'whole' | 'half'&quot;, &quot;options&quot;: [&quot;whole&quot;, &quot;half&quot;], &quot;section&quot;: &quot;Behavior&quot;},
+  &quot;isAdmin&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Access&quot;, &quot;descriptionForModel&quot;: &quot;Shows the admin-only Manage connections section on the Team tab&quot;}
+}">
+const STORAGE_KEY = 'weeklyTimesheet.v1';
+const DAY_KEYS = ['mon','tue','wed','thu','fri','sat','sun'];
+const DAY_ABBR = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const DAY_FULL = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+
+const COLOR = {
+  border: 'oklch(0.91 0.006 60)',
+  text: 'oklch(0.24 0.01 55)',
+  textSecondary: 'oklch(0.5 0.012 55)',
+  textMuted: 'oklch(0.55 0.01 55)',
+  accent: 'oklch(0.54 0.19 350)',
+  accentTint: 'oklch(0.95 0.035 350)',
+  accentTintText: 'oklch(0.4 0.15 350)',
+  successTint: 'oklch(0.94 0.035 235)',
+  successText: 'oklch(0.4 0.13 235)',
+  danger: 'oklch(0.48 0.18 25)',
+  dangerTint: 'oklch(0.95 0.05 25)',
+  progressTint: 'oklch(0.95 0.015 250)',
+  progressText: 'oklch(0.45 0.03 250)',
+  disabledBg: 'oklch(0.965 0.004 60)',
+  white: 'oklch(1 0 0)',
+};
+
+const STATUS_META = {
+  draft: {label:'Draft', bg:'oklch(0.94 0.006 60)', fg:'oklch(0.42 0.012 60)'},
+  submitted: {label:'Submitted', bg: COLOR.accentTint, fg: COLOR.accentTintText},
+};
+
+const AVATAR_HUES = [265, 195, 150, 45];
+
+// Full project list — in production this is fetched from ADO
+const PROJECTS = [
+  {id:'p1', name:'Website Redesign'},
+  {id:'p2', name:'Client Onboarding Platform'},
+  {id:'p3', name:'Mobile App \u2013 iOS'},
+  {id:'p4', name:'Data Migration'},
+  {id:'p5', name:'Internal Tools'},
+  {id:'p6', name:'Q3 Marketing Campaign'},
+  {id:'p7', name:'Platform Reliability'},
+];
+const CATEGORIES = [
+  {id:'c1', name:'Annual Leave / PTO'},
+  {id:'c2', name:'Public Holiday'},
+  {id:'c3', name:'Sick Leave'},
+  {id:'c4', name:'Training'},
+  {id:'c5', name:'Internal / Admin Time'},
+];
+
+function isoDate(dt) {
+  const y = dt.getFullYear(), m = String(dt.getMonth()+1).padStart(2,'0'), d = String(dt.getDate()).padStart(2,'0');
+  return y+'-'+m+'-'+d;
+}
+function getMonday(d) {
+  const dt = new Date(d);
+  const day = dt.getDay();
+  const diff = (day + 6) % 7;
+  dt.setDate(dt.getDate() - diff);
+  dt.setHours(0,0,0,0);
+  return isoDate(dt);
+}
+function shiftDate(iso, days) {
+  const dt = new Date(iso + 'T00:00:00');
+  dt.setDate(dt.getDate() + days);
+  return isoDate(dt);
+}
+function fmtHoursOrZero(n) {
+  return (n % 1 === 0) ? String(n) : n.toFixed(1);
+}
+function initialsOf(name) {
+  return name.split(' ').filter(Boolean).map(w => w[0]).slice(0,2).join('').toUpperCase();
+}
+function formatSubmittedAt(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric'}) + ' \u00b7 ' + d.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit'});
+}
+function emptyHours() { return {mon:0,tue:0,wed:0,thu:0,fri:0,sat:0,sun:0}; }
+
+class Component extends DCLogic {
+  state = this.buildInitialState();
+
+  componentDidMount() {
+    this.updateViewport = () => this.setState({isNarrowViewport: window.innerWidth < 640});
+    this.updateViewport();
+    window.addEventListener('resize', this.updateViewport);
+  }
+  componentWillUnmount() {
+    window.removeEventListener('resize', this.updateViewport);
+  }
+
+  buildInitialState() {
+    const todayMonday = getMonday(new Date());
+    const prevMonday = shiftDate(todayMonday, -7);
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); } catch (e) {}
+    const defaultWorkingWeek = {
+      mon:{active:true,hours:8}, tue:{active:true,hours:8}, wed:{active:true,hours:8},
+      thu:{active:true,hours:8}, fri:{active:true,hours:8}, sat:{active:false,hours:0}, sun:{active:false,hours:0},
+    };
+    const seedWeeks = {
+      [prevMonday]: {
+        rows: [
+          {id:'r1', kind:'project', refId:'p1', name:'Website Redesign', hours:{mon:5,tue:4,wed:4,thu:4,fri:4,sat:0,sun:0}},
+          {id:'r2', kind:'project', refId:'p2', name:'Client Onboarding Platform', hours:{mon:3,tue:4,wed:4,thu:4,fri:4,sat:0,sun:0}},
+        ],
+        status:'submitted', submittedAt: prevMonday+'T17:32:00',
+      },
+      [todayMonday]: {
+        rows: [
+          {id:'r3', kind:'project', refId:'p1', name:'Website Redesign', hours:{mon:4,tue:5,wed:3,thu:4,fri:2,sat:0,sun:0}},
+          {id:'r4', kind:'project', refId:'p2', name:'Client Onboarding Platform', hours:{mon:3,tue:2,wed:4,thu:3,fri:0,sat:0,sun:0}},
+          {id:'r5', kind:'category', refId:'c5', name:'Internal / Admin Time', hours:{mon:1,tue:1,wed:1,thu:1,fri:1,sat:0,sun:0}},
+        ],
+        status:'draft', submittedAt:null,
+      },
+    };
+    const seedTeam = [
+      {id:'m1', name:'Alice Chen', weeks: {
+        [prevMonday]: {rows:[{id:'t1p', kind:'project', refId:'p3', name:'Mobile App \u2013 iOS', hours:{mon:8,tue:8,wed:8,thu:8,fri:8,sat:0,sun:0}}], status:'submitted', submittedAt: prevMonday+'T15:40:00'},
+        [todayMonday]: {rows:[{id:'t1', kind:'project', refId:'p3', name:'Mobile App \u2013 iOS', hours:{mon:8,tue:8,wed:8,thu:8,fri:8,sat:0,sun:0}}], status:'submitted', submittedAt: todayMonday+'T16:10:00'},
+      }},
+      {id:'m2', name:'Ben Ortiz', weeks: {
+        [prevMonday]: {rows:[{id:'t2p', kind:'project', refId:'p4', name:'Data Migration', hours:{mon:7,tue:7,wed:7,thu:7,fri:7,sat:0,sun:0}}], status:'submitted', submittedAt: prevMonday+'T18:02:00'},
+        [todayMonday]: {rows:[{id:'t2', kind:'project', refId:'p4', name:'Data Migration', hours:{mon:6,tue:6,wed:5,thu:5,fri:0,sat:0,sun:0}}], status:'draft', submittedAt:null},
+      }},
+      {id:'m3', name:'Priya Nair', weeks: {
+        [prevMonday]: {rows:[{id:'t3p', kind:'project', refId:'p6', name:'Q3 Marketing Campaign', hours:{mon:8,tue:8,wed:8,thu:8,fri:8,sat:0,sun:0}}], status:'submitted', submittedAt: prevMonday+'T10:00:00'},
+        [todayMonday]: {rows:[{id:'t3', kind:'project', refId:'p6', name:'Q3 Marketing Campaign', hours:{mon:8,tue:8,wed:8,thu:8,fri:8,sat:0,sun:0}}], status:'submitted', submittedAt: todayMonday+'T09:05:00'},
+      }},
+      {id:'m4', name:'Sam Whitfield', weeks: {
+        [prevMonday]: {rows:[{id:'t4p', kind:'project', refId:'p7', name:'Platform Reliability', hours:{mon:8,tue:8,wed:8,thu:8,fri:8,sat:0,sun:0}}], status:'submitted', submittedAt: prevMonday+'T17:00:00'},
+        [todayMonday]: {rows:[{id:'t4', kind:'project', refId:'p7', name:'Platform Reliability', hours:{mon:8,tue:6,wed:8,thu:8,fri:6,sat:0,sun:0}}], status:'draft', submittedAt:null},
+      }},
+    ];
+    const defaultEnabledProjects = {};
+    PROJECTS.forEach(p => { defaultEnabledProjects[p.id] = true; });
+    let team = (saved && Array.isArray(saved.team)) ? saved.team : seedTeam;
+    team = team.map(m => m.weeks ? m : {id: m.id, name: m.name, weeks: {[todayMonday]: {rows: m.rows || [], status: m.status || 'draft', submittedAt: m.submittedAt || null}}});
+    return {
+      activeTab: 'mine',
+      settingsOpen: false,
+      addPickerOpen: false,
+      addPickerQuery: '',
+      projectAdminQuery: '',
+      confirmSubmitOpen: false,
+      categoryAdminOpen: false,
+      newCategoryName: '',
+      teamAdminOpen: false,
+      newMemberName: '',
+      connectionsOpen: false,
+      adoOrgUrl: (saved && saved.connections && saved.connections.adoOrgUrl) || '',
+      adoProjectName: (saved && saved.connections && saved.connections.adoProjectName) || '',
+      adoPat: (saved && saved.connections && saved.connections.adoPat) || '',
+      adoConnected: (saved && saved.connections && saved.connections.adoConnected) || false,
+      storageProvider: (saved && saved.connections && saved.connections.storageProvider) || 'azureTable',
+      storageTarget: (saved && saved.connections && saved.connections.storageTarget) || '',
+      dashboardPeriod: '8w',
+      dashboardScope: 'all',
+      teamDashboardPeriod: '8w',
+      teamDashboardScope: 'all',
+      isNarrowViewport: false,
+      toast: null,
+      expandedMemberId: null,
+      currentWeekStart: todayMonday,
+      workingWeek: (saved && saved.workingWeek) || defaultWorkingWeek,
+      enabledProjects: (saved && saved.enabledProjects) || defaultEnabledProjects,
+      categories: (saved && saved.categories) || CATEGORIES.slice(),
+      weeks: (saved && saved.weeks) || seedWeeks,
+      team,
+    };
+  }
+
+  persist() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({workingWeek:this.state.workingWeek, enabledProjects:this.state.enabledProjects, categories:this.state.categories, weeks:this.state.weeks, team:this.state.team,
+        connections: {adoOrgUrl:this.state.adoOrgUrl, adoProjectName:this.state.adoProjectName, adoPat:this.state.adoPat, adoConnected:this.state.adoConnected, storageProvider:this.state.storageProvider, storageTarget:this.state.storageTarget}}));
+    } catch (e) {}
+  }
+
+  showToast(msg) {
+    this.setState({toast: msg});
+    clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => this.setState({toast: null}), 2600);
+  }
+
+  getStep() { return this.props.timeIncrement === 'whole' ? 1 : 0.5; }
+
+  parseHourInput(raw, step) {
+    let v = parseFloat(raw);
+    if (isNaN(v) || v < 0) v = 0;
+    if (v > 24) v = 24;
+    v = step === 0.5 ? Math.round(v * 2) / 2 : Math.round(v);
+    return v;
+  }
+
+  switchTab(tab) {
+    if (tab === 'team' && !(this.props.showTeamTab ?? true)) return;
+    this.setState({activeTab: tab});
+  }
+  goPrevWeek() { this.setState(s => ({currentWeekStart: shiftDate(s.currentWeekStart, -7)})); }
+  goNextWeek() { this.setState(s => ({currentWeekStart: shiftDate(s.currentWeekStart, 7)})); }
+  goToday() { this.setState({currentWeekStart: getMonday(new Date())}); }
+  openHistoryWeek(ws) { this.setState({currentWeekStart: ws, activeTab: 'mine'}); }
+
+  getWeekData(weekStart) {
+    return this.state.weeks[weekStart] || {rows: [], status: 'draft', submittedAt: null};
+  }
+
+  getMemberWeekData(member, weekStart) {
+    return (member.weeks && member.weeks[weekStart]) || {rows: [], status: 'draft', submittedAt: null};
+  }
+
+  addRow(kind, refId, name) {
+    const ws = this.state.currentWeekStart;
+    const wk = this.getWeekData(ws);
+    if (wk.rows.some(r => r.refId === refId)) {
+      this.setState({addPickerOpen: false, addPickerQuery: ''});
+      return;
+    }
+    const newRow = {id: 'row-'+Date.now()+'-'+Math.random().toString(36).slice(2,7), kind, refId, name, hours: emptyHours()};
+    const updated = {...wk, rows: [...wk.rows, newRow]};
+    this.setState(s => ({weeks: {...s.weeks, [ws]: updated}, addPickerOpen: false, addPickerQuery: ''}), () => this.persist());
+  }
+
+  setWeekNote(rawValue) {
+    const ws = this.state.currentWeekStart;
+    const wk = this.getWeekData(ws);
+    const updated = {...wk, note: rawValue};
+    this.setState(s => ({weeks: {...s.weeks, [ws]: updated}}), () => this.persist());
+  }
+  fillRemainingHours() {
+    const ws = this.state.currentWeekStart;
+    const wk = this.getWeekData(ws);
+    if (wk.status === 'submitted' || wk.rows.length === 0) return;
+    const days = this.dayMeta(ws);
+    const firstRow = wk.rows[0];
+    const newHours = {...firstRow.hours};
+    let changed = false;
+    days.forEach(d => {
+      if (!d.active) return;
+      const totalOther = wk.rows.reduce((sum, r) => sum + (r.id === firstRow.id ? 0 : (r.hours[d.key]||0)), 0);
+      const remaining = d.target - totalOther - (firstRow.hours[d.key]||0);
+      if (remaining > 0) { newHours[d.key] = (firstRow.hours[d.key]||0) + remaining; changed = true; }
+    });
+    if (!changed) { this.showToast('Nothing to fill'); return; }
+    const updatedRows = wk.rows.map(r => r.id === firstRow.id ? {...r, hours: newHours} : r);
+    this.setState(s => ({weeks: {...s.weeks, [ws]: {...wk, rows: updatedRows}}}), () => { this.persist(); this.showToast('Filled remaining hours into '+firstRow.name); });
+  }
+  removeRow(rowId) {
+    const ws = this.state.currentWeekStart;
+    const wk = this.getWeekData(ws);
+    const updated = {...wk, rows: wk.rows.filter(r => r.id !== rowId)};
+    this.setState(s => ({weeks: {...s.weeks, [ws]: updated}}), () => this.persist());
+  }
+
+  updateHour(rowId, dayKey, rawValue) {
+    const v = this.parseHourInput(rawValue, this.getStep());
+    const ws = this.state.currentWeekStart;
+    const wk = this.getWeekData(ws);
+    const updated = {...wk, rows: wk.rows.map(r => r.id === rowId ? {...r, hours: {...r.hours, [dayKey]: v}} : r)};
+    this.setState(s => ({weeks: {...s.weeks, [ws]: updated}}), () => this.persist());
+  }
+
+  copyLastWeek() {
+    const ws = this.state.currentWeekStart;
+    const prev = this.getWeekData(shiftDate(ws, -7));
+    if (!prev.rows.length) { this.showToast('No projects logged last week'); return; }
+    const wk = this.getWeekData(ws);
+    const existingRefs = new Set(wk.rows.map(r => r.refId));
+    const toAdd = prev.rows.filter(r => !existingRefs.has(r.refId)).map(r => ({
+      id: 'row-'+Date.now()+'-'+Math.random().toString(36).slice(2,7)+r.refId,
+      kind: r.kind, refId: r.refId, name: r.name, hours: emptyHours(),
+    }));
+    if (!toAdd.length) { this.showToast('Already added those projects'); return; }
+    const updated = {...wk, rows: [...wk.rows, ...toAdd]};
+    this.setState(s => ({weeks: {...s.weeks, [ws]: updated}}), () => {
+      this.persist();
+      this.showToast('Copied '+toAdd.length+' project'+(toAdd.length>1?'s':'')+' from last week');
+    });
+  }
+
+  submitWeek() {
+    const ws = this.state.currentWeekStart;
+    const wk = this.getWeekData(ws);
+    const updated = {...wk, status:'submitted', submittedAt: new Date().toISOString()};
+    this.setState(s => ({weeks: {...s.weeks, [ws]: updated}}), () => { this.persist(); this.showToast('Submitted for approval'); });
+  }
+
+  attemptSubmit(mismatchCount, isFutureWeek) {
+    if (mismatchCount === 0 && !isFutureWeek) { this.submitWeek(); return; }
+    this.setState({confirmSubmitOpen: true});
+  }
+  confirmSubmitAnyway() { this.setState({confirmSubmitOpen: false}); this.submitWeek(); }
+  cancelConfirmSubmit() { this.setState({confirmSubmitOpen: false}); }
+
+  editWeek() {
+    const ws = this.state.currentWeekStart;
+    const wk = this.getWeekData(ws);
+    const updated = {...wk, status:'draft'};
+    this.setState(s => ({weeks: {...s.weeks, [ws]: updated}}), () => this.persist());
+  }
+
+  toggleDayActive(dayKey) {
+    this.setState(s => ({workingWeek: {...s.workingWeek, [dayKey]: {...s.workingWeek[dayKey], active: !s.workingWeek[dayKey].active}}}), () => this.persist());
+  }
+  setDayHours(dayKey, rawValue) {
+    const v = this.parseHourInput(rawValue, 0.5);
+    this.setState(s => ({workingWeek: {...s.workingWeek, [dayKey]: {...s.workingWeek[dayKey], hours: v}}}), () => this.persist());
+  }
+  applyStandardHoursToAll() {
+    this.setState(s => {
+      const next = {...s.workingWeek};
+      DAY_KEYS.forEach(k => { if (next[k].active) next[k] = {...next[k], hours: 7.5}; });
+      return {workingWeek: next};
+    }, () => this.persist());
+  }
+  toggleProjectEnabled(id) {
+    this.setState(s => ({enabledProjects: {...s.enabledProjects, [id]: !s.enabledProjects[id]}}), () => this.persist());
+  }
+  setProjectAdminQuery(e) { this.setState({projectAdminQuery: e.target.value}); }
+  openCategoryAdmin() { this.setState({categoryAdminOpen: true}); }
+  closeCategoryAdmin() { this.setState({categoryAdminOpen: false, newCategoryName: ''}); }
+  setNewCategoryName(e) { this.setState({newCategoryName: e.target.value}); }
+  addCategory() {
+    const name = this.state.newCategoryName.trim();
+    if (!name) return;
+    const id = 'cat-'+Date.now()+'-'+Math.random().toString(36).slice(2,7);
+    this.setState(s => ({categories: [...s.categories, {id, name}], newCategoryName: ''}), () => this.persist());
+  }
+  removeCategory(id) {
+    this.setState(s => ({categories: s.categories.filter(c => c.id !== id)}), () => this.persist());
+  }
+  openConnections() { this.setState({connectionsOpen: true}); }
+  closeConnections() { this.setState({connectionsOpen: false}); }
+  setAdoOrgUrl(e) { this.setState({adoOrgUrl: e.target.value, adoConnected: false}); }
+  setAdoProjectName(e) { this.setState({adoProjectName: e.target.value, adoConnected: false}); }
+  setAdoPat(e) { this.setState({adoPat: e.target.value, adoConnected: false}); }
+  testAdoConnection() {
+    if (!this.state.adoOrgUrl.trim() || !this.state.adoProjectName.trim() || !this.state.adoPat.trim()) {
+      this.showToast('Fill in organization URL, project, and token first');
+      return;
+    }
+    this.setState({adoConnected: true}, () => { this.persist(); this.showToast('Connected to Azure DevOps'); });
+  }
+  setStorageProvider(key) { this.setState({storageProvider: key}); }
+  setStorageTarget(e) { this.setState({storageTarget: e.target.value}); }
+  saveConnections() { this.persist(); this.showToast('Connection settings saved'); this.closeConnections(); }
+  openTeamAdmin() { this.setState({teamAdminOpen: true}); }
+  closeTeamAdmin() { this.setState({teamAdminOpen: false, newMemberName: ''}); }
+  setNewMemberName(e) { this.setState({newMemberName: e.target.value}); }
+  addTeamMember() {
+    const name = this.state.newMemberName.trim();
+    if (!name) return;
+    const id = 'member-'+Date.now()+'-'+Math.random().toString(36).slice(2,7);
+    this.setState(s => ({team: [...s.team, {id, name, weeks: {}}], newMemberName: ''}), () => this.persist());
+  }
+  removeTeamMember(id) {
+    this.setState(s => ({team: s.team.filter(m => m.id !== id), expandedMemberId: s.expandedMemberId === id ? null : s.expandedMemberId}), () => this.persist());
+  }
+  setDashboardPeriod(key) { this.setState({dashboardPeriod: key}); }
+  setDashboardScope(key) { this.setState({dashboardScope: key}); }
+  setTeamDashboardScope(key) { this.setState({teamDashboardScope: key}); }
+  setTeamDashboardPeriod(key) { this.setState({teamDashboardPeriod: key}); }
+  buildTeamBreakdown(periodKey, scopeMode) {
+    const s = this.state;
+    const todayMonday = getMonday(new Date());
+    let weekStarts;
+    if (periodKey === 'all') {
+      const keySet = new Set(Object.keys(s.weeks));
+      s.team.forEach(m => Object.keys(m.weeks || {}).forEach(k => keySet.add(k)));
+      keySet.add(todayMonday);
+      weekStarts = Array.from(keySet);
+    } else {
+      const n = periodKey === '4w' ? 4 : periodKey === '12w' ? 12 : 8;
+      weekStarts = Array.from({length: n}, (_, i) => shiftDate(todayMonday, -7 * i));
+    }
+    const byName = new Map();
+    let totalHours = 0;
+    const accumulate = (rows) => {
+      rows.forEach(r => {
+        if (scopeMode === 'projectsOnly' && r.kind !== 'project') return;
+        if (scopeMode === 'nonProjectOnly' && r.kind !== 'category') return;
+        const rowTotal = DAY_KEYS.reduce((sum, k) => sum + (r.hours[k]||0), 0);
+        if (rowTotal <= 0) return;
+        totalHours += rowTotal;
+        const prev = byName.get(r.name) || {name: r.name, kind: r.kind, hours: 0};
+        prev.hours += rowTotal;
+        byName.set(r.name, prev);
+      });
+    };
+    weekStarts.forEach(ws => {
+      const selfWk = s.weeks[ws];
+      if (selfWk) accumulate(selfWk.rows);
+      s.team.forEach(m => {
+        const mwk = m.weeks && m.weeks[ws];
+        if (mwk) accumulate(mwk.rows);
+      });
+    });
+    const breakdown = Array.from(byName.values()).sort((a, b) => b.hours - a.hours).map(item => {
+      const pct = totalHours > 0 ? Math.round(item.hours / totalHours * 100) : 0;
+      return {
+        name: item.name, hoursDisplay: fmtHoursOrZero(item.hours), pct,
+        barStyle: {width: pct+'%', height:'100%', borderRadius:'4px', background: item.kind==='project' ? COLOR.accent : 'oklch(0.72 0.03 90)'},
+      };
+    });
+    return {breakdown, totalHoursDisplay: fmtHoursOrZero(totalHours), weeksInRange: weekStarts.length};
+  }
+  buildDashboardData(periodKey, scopeMode) {
+    const s = this.state;
+    const todayMonday = getMonday(new Date());
+    let weekStarts;
+    if (periodKey === 'all') {
+      weekStarts = Object.keys(s.weeks);
+      if (!weekStarts.includes(todayMonday)) weekStarts.push(todayMonday);
+    } else {
+      const n = periodKey === '4w' ? 4 : periodKey === '12w' ? 12 : 8;
+      weekStarts = Array.from({length: n}, (_, i) => shiftDate(todayMonday, -7 * i));
+    }
+    const byName = new Map();
+    let totalHours = 0, weeksWithData = 0, weeksSubmitted = 0;
+    weekStarts.forEach(ws => {
+      const wk = s.weeks[ws];
+      if (!wk) return;
+      if (wk.rows.length > 0) weeksWithData++;
+      if (wk.status === 'submitted') weeksSubmitted++;
+      wk.rows.forEach(r => {
+        if (scopeMode === 'projectsOnly' && r.kind !== 'project') return;
+        if (scopeMode === 'nonProjectOnly' && r.kind !== 'category') return;
+        const rowTotal = DAY_KEYS.reduce((sum, k) => sum + (r.hours[k]||0), 0);
+        if (rowTotal <= 0) return;
+        totalHours += rowTotal;
+        const prev = byName.get(r.name) || {name: r.name, kind: r.kind, hours: 0};
+        prev.hours += rowTotal;
+        byName.set(r.name, prev);
+      });
+    });
+    const breakdown = Array.from(byName.values()).sort((a, b) => b.hours - a.hours).map(item => {
+      const pct = totalHours > 0 ? Math.round(item.hours / totalHours * 100) : 0;
+      return {
+        name: item.name, hoursDisplay: fmtHoursOrZero(item.hours), pct,
+        barStyle: {width: pct+'%', height:'100%', borderRadius:'4px', background: item.kind==='project' ? COLOR.accent : 'oklch(0.72 0.03 90)'},
+      };
+    });
+    return {
+      breakdown, totalHoursDisplay: fmtHoursOrZero(totalHours),
+      weeksInRange: weekStarts.length, weeksSubmitted,
+      avgPerWeekDisplay: weeksWithData > 0 ? fmtHoursOrZero(totalHours / weeksWithData) : '0',
+    };
+  }
+  openSettings() { this.setState({settingsOpen: true}); }
+  closeSettings() { this.setState({settingsOpen: false}); }
+
+  toggleAddPicker() { this.setState(s => ({addPickerOpen: !s.addPickerOpen, addPickerQuery: ''})); }
+  setAddPickerQuery(e) { this.setState({addPickerQuery: e.target.value}); }
+
+  toggleExpand(id) { this.setState(s => ({expandedMemberId: s.expandedMemberId === id ? null : id})); }
+
+  dayMeta(weekStart) {
+    const start = new Date(weekStart+'T00:00:00');
+    return DAY_KEYS.map((key, i) => {
+      const d = new Date(start); d.setDate(d.getDate()+i);
+      const wd = this.state.workingWeek[key];
+      return {
+        key, label: DAY_ABBR[i],
+        dateLabel: d.toLocaleDateString('en-US', {month:'short', day:'numeric'}),
+        active: wd.active, target: wd.active ? wd.hours : 0,
+      };
+    });
+  }
+
+  weekRangeLabel(weekStart) {
+    const start = new Date(weekStart+'T00:00:00');
+    const end = new Date(start); end.setDate(end.getDate()+6);
+    const y = end.getFullYear();
+    if (start.getMonth() === end.getMonth()) {
+      return start.toLocaleDateString('en-US',{month:'short'})+' '+start.getDate()+'\u2013'+end.getDate()+', '+y;
+    }
+    return start.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' \u2013 '+end.toLocaleDateString('en-US',{month:'short',day:'numeric'})+', '+y;
+  }
+
+  handleCellKeyDown(e, rowId, dayKey) {
+    const map = {ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right'};
+    const dir = map[e.key];
+    if (!dir) return;
+    e.preventDefault();
+    const wk = this.getWeekData(this.state.currentWeekStart);
+    const rowIds = wk.rows.map(r => r.id);
+    let ri = rowIds.indexOf(rowId);
+    let di = DAY_KEYS.indexOf(dayKey);
+    if (dir === 'up') ri -= 1;
+    else if (dir === 'down') ri += 1;
+    else if (dir === 'left') di -= 1;
+    else if (dir === 'right') di += 1;
+    if (ri < 0 || ri >= rowIds.length || di < 0 || di >= DAY_KEYS.length) return;
+    const el = document.getElementById('cell-'+rowIds[ri]+'-'+DAY_KEYS[di]);
+    if (el && !el.disabled) { el.focus(); el.select(); }
+  }
+  fillRowEvenly(rowId) {
+    const ws = this.state.currentWeekStart;
+    const wk = this.getWeekData(ws);
+    if (wk.status === 'submitted') return;
+    const row = wk.rows.find(r => r.id === rowId);
+    if (!row) return;
+    const activeDays = this.dayMeta(ws).filter(d => d.active);
+    const existing = activeDays.map(d => row.hours[d.key]||0).find(v => v > 0);
+    if (!existing) { this.showToast('Enter a value first'); return; }
+    const newHours = {...row.hours};
+    activeDays.forEach(d => { newHours[d.key] = existing; });
+    const updatedRows = wk.rows.map(r => r.id === rowId ? {...r, hours: newHours} : r);
+    this.setState(s => ({weeks: {...s.weeks, [ws]: {...wk, rows: updatedRows}}}), () => { this.persist(); this.showToast('Applied '+fmtHoursOrZero(existing)+'h to all active days'); });
+  }
+  buildRowsView(wk, days, locked) {
+    return wk.rows.map(row => {
+      const cells = days.map(d => {
+        const val = row.hours[d.key] || 0;
+        const disabled = locked || !d.active;
+        const style = {
+          width: '100%', boxSizing: 'border-box', textAlign: 'center', padding: '7px 4px', outline: 'none',
+          border: '1px solid '+(disabled ? 'transparent' : COLOR.border), borderRadius: '6px',
+          fontFamily: "'Space Mono', monospace", fontSize: '13px',
+          background: disabled ? COLOR.disabledBg : COLOR.white,
+          color: disabled ? COLOR.textMuted : COLOR.text,
+        };
+        return {
+          key: d.key, id: 'cell-'+row.id+'-'+d.key, label: d.label, dateLabel: d.dateLabel,
+          display: val === 0 ? '' : fmtHoursOrZero(val),
+          disabled, style, mobileStyle: {...style, width:'90px', flexShrink:'0'},
+          onChange: disabled ? undefined : ((e) => this.updateHour(row.id, d.key, e.target.value)),
+          onKeyDown: (e) => this.handleCellKeyDown(e, row.id, d.key),
+        };
+      });
+      const total = days.reduce((sum, d) => sum + (row.hours[d.key]||0), 0);
+      const compactBreakdown = days.filter(d => d.active && (row.hours[d.key]||0) > 0)
+        .map(d => d.label+' '+fmtHoursOrZero(row.hours[d.key])).join(' \u00b7 ');
+      return {
+        id: row.id, name: row.name, isProject: row.kind === 'project',
+        totalDisplay: fmtHoursOrZero(total), cells,
+        canRemove: !locked, onRemove: locked ? undefined : (() => this.removeRow(row.id)),
+        canFillSame: !locked, onFillSame: locked ? undefined : (() => this.fillRowEvenly(row.id)),
+        compactBreakdown: compactBreakdown || 'No hours logged',
+      };
+    });
+  }
+
+  footerDays(wk, days, requireExact) {
+    return days.map(d => {
+      const total = wk.rows.reduce((sum, r) => sum + (r.hours[d.key]||0), 0);
+      let state = 'na', mismatch = false;
+      if (d.active) {
+        if (total === d.target) state = 'ok';
+        else if (total > d.target) { state = 'over'; mismatch = !!requireExact; }
+        else { state = 'under'; mismatch = true; }
+      }
+      const bg = state==='ok' ? COLOR.successTint : (state==='over' || state==='under') ? COLOR.progressTint : 'transparent';
+      const fg = state==='ok' ? COLOR.successText : (state==='over' || state==='under') ? COLOR.progressText : COLOR.textMuted;
+      return {
+        key: d.key, mismatch, total, target: d.target, label: d.label,
+        display: d.active ? (fmtHoursOrZero(total)+'/'+fmtHoursOrZero(d.target)) : '\u2014',
+        style: {padding:'8px 4px', textAlign:'center', borderRadius:'6px', background:bg, color:fg, fontFamily:"'Space Mono', monospace", fontSize:'12.5px', fontWeight:'700'},
+      };
+    });
+  }
+
+  renderVals() {
+    const s = this.state;
+    const showTeamTab = this.props.showTeamTab ?? true;
+    const requireExact = this.props.requireExactMatch ?? true;
+    const isTeamTab = s.activeTab === 'team' && showTeamTab;
+    const isHistoryTab = s.activeTab === 'history' && !isTeamTab;
+    const isMineTab = !isTeamTab && !isHistoryTab;
+    const todayMonday = getMonday(new Date());
+    const isFutureWeek = s.currentWeekStart > todayMonday;
+
+    const days = this.dayMeta(s.currentWeekStart);
+    const wk = this.getWeekData(s.currentWeekStart);
+    const locked = wk.status === 'submitted';
+    const rows = this.buildRowsView(wk, days, locked);
+    const fDays = this.footerDays(wk, days, requireExact);
+
+    const weekTotalActual = days.reduce((sum, d) => sum + wk.rows.reduce((s2,r)=>s2+(r.hours[d.key]||0),0), 0);
+    const weekTarget = days.reduce((sum, d) => sum + d.target, 0);
+    const diff = weekTarget - weekTotalActual;
+    let remainingLabel;
+    if (weekTarget === 0) remainingLabel = 'No working days set';
+    else if (diff > 0) remainingLabel = fmtHoursOrZero(diff)+'h remaining';
+    else if (diff < 0) remainingLabel = fmtHoursOrZero(-diff)+'h over';
+    else remainingLabel = 'All accounted for';
+    const progressPct = weekTarget > 0 ? Math.min(100, Math.round(weekTotalActual/weekTarget*100)) : 0;
+
+    const mismatchDays = fDays.filter(d => d.mismatch);
+    let submitHelperText;
+    if (wk.status === 'submitted') submitHelperText = 'Submitted '+formatSubmittedAt(wk.submittedAt)+'. Locked for editing.';
+    else if (weekTarget === 0) submitHelperText = 'Set your working week in Settings first.';
+    else if (rows.length === 0) submitHelperText = 'Add a project above to get started.';
+    else if (mismatchDays.length === 0) submitHelperText = 'All hours accounted for.';
+    else if (mismatchDays.length === 1) submitHelperText = mismatchDays[0].label+' looks different from your usual hours.';
+    else submitHelperText = mismatchDays.length+' days differ from your usual hours: '+mismatchDays.map(d=>d.label).join(', ')+'.';
+
+    const submitDisabled = !(wk.status === 'draft' && weekTarget > 0 && rows.length > 0);
+    const needsWorkingWeekSetup = weekTarget === 0;
+    const statusMeta = STATUS_META[wk.status];
+    const fillRemainingDisabled = locked || rows.length === 0 || weekTarget === 0;
+    const fillRemainingButtonStyle = {padding:'9px 16px', border:'1px solid transparent', borderRadius:'8px', background:'transparent',
+      cursor: fillRemainingDisabled ? 'not-allowed' : 'pointer', fontSize:'13.5px', fontWeight:'600', color: fillRemainingDisabled ? COLOR.textMuted : COLOR.textSecondary};
+    const weekNoteStyle = {width:'100%', boxSizing:'border-box', padding:'10px 12px', border:'1px solid '+COLOR.border, borderRadius:'9px',
+      fontSize:'13.5px', fontFamily:'inherit', resize:'vertical', outline:'none', background: locked ? COLOR.disabledBg : COLOR.white, color: locked ? COLOR.textMuted : COLOR.text};
+    const confirmSubmitLines = mismatchDays.map(d => ({
+      label: d.label,
+      detail: fmtHoursOrZero(d.total)+'h logged \u00b7 '+fmtHoursOrZero(d.target)+'h usual',
+    }));
+
+    const existingRefs = new Set(wk.rows.map(r => r.refId));
+    const q = s.addPickerQuery.trim().toLowerCase();
+    const addProjects = PROJECTS.filter(p => s.enabledProjects[p.id] !== false && !existingRefs.has(p.id) && p.name.toLowerCase().includes(q))
+      .map(p => ({id:p.id, name:p.name, onAdd: () => this.addRow('project', p.id, p.name)}));
+    const addCategories = s.categories.filter(c => !existingRefs.has(c.id) && c.name.toLowerCase().includes(q))
+      .map(c => ({id:c.id, name:c.name, onAdd: () => this.addRow('category', c.id, c.name)}));
+    const categoryAdminRows = s.categories.map(c => ({id:c.id, name:c.name, onRemove: () => this.removeCategory(c.id)}));
+    const addCategoryDisabled = !s.newCategoryName.trim();
+    const addCategoryButtonStyle = {padding:'9px 16px', border:'none', borderRadius:'7px', fontSize:'13px', fontWeight:'700',
+      background: addCategoryDisabled ? COLOR.disabledBg : COLOR.accent, color: addCategoryDisabled ? COLOR.textMuted : 'white',
+      cursor: addCategoryDisabled ? 'not-allowed' : 'pointer'};
+    const STORAGE_PROVIDERS = [
+      {key:'azureTable', label:'Azure Table Storage', targetLabel:'Table name', targetPlaceholder:'e.g. TimesheetEntries'},
+      {key:'sharepoint', label:'SharePoint list', targetLabel:'Site URL and list name', targetPlaceholder:'https://contoso.sharepoint.com/sites/Ops \u2013 Timesheets'},
+      {key:'sqlDatabase', label:'SQL database', targetLabel:'Connection string', targetPlaceholder:'server, database, or connection string'},
+    ];
+    const storageProviderStyleFor = (active) => ({
+      padding:'9px 12px', border:'1px solid '+(active?COLOR.accent:COLOR.border), borderRadius:'8px', textAlign:'left',
+      fontSize:'13px', fontWeight: active?'700':'600', cursor:'pointer',
+      background: active ? COLOR.accentTint : COLOR.white, color: active ? COLOR.accentTintText : COLOR.text,
+    });
+    const storageProviderOptions = STORAGE_PROVIDERS.map(p => ({key:p.key, label:p.label, onClick: () => this.setStorageProvider(p.key), style: storageProviderStyleFor(s.storageProvider===p.key)}));
+    const activeStorageProvider = STORAGE_PROVIDERS.find(p => p.key === s.storageProvider) || STORAGE_PROVIDERS[0];
+    const adoStatusPillStyle = {background: s.adoConnected ? COLOR.successTint : COLOR.dangerTint, color: s.adoConnected ? COLOR.successText : COLOR.danger, padding:'5px 12px', borderRadius:'100px', fontSize:'12.5px', fontWeight:'700', display:'inline-flex', alignItems:'center', whiteSpace:'nowrap'};
+    const adoStatusLabel = s.adoConnected ? 'Connected' : 'Not connected';
+    const testAdoDisabled = !(s.adoOrgUrl.trim() && s.adoProjectName.trim() && s.adoPat.trim());
+    const testAdoButtonStyle = {padding:'8px 14px', border:'1px solid '+COLOR.border, borderRadius:'7px', fontSize:'12.5px', fontWeight:'700',
+      background: COLOR.white, color: testAdoDisabled ? COLOR.textMuted : COLOR.text, cursor: testAdoDisabled ? 'not-allowed' : 'pointer'};
+
+    const teamAdminRows = s.team.map(m => ({id:m.id, name:m.name, onRemove: () => this.removeTeamMember(m.id)}));
+    const addMemberDisabled = !s.newMemberName.trim();
+    const addMemberButtonStyle = {padding:'9px 16px', border:'none', borderRadius:'7px', fontSize:'13px', fontWeight:'700',
+      background: addMemberDisabled ? COLOR.disabledBg : COLOR.accent, color: addMemberDisabled ? COLOR.textMuted : 'white',
+      cursor: addMemberDisabled ? 'not-allowed' : 'pointer'};
+
+    const projQuery = (s.projectAdminQuery || '').trim().toLowerCase();
+    const enabledProjectCount = PROJECTS.filter(p => s.enabledProjects[p.id] !== false).length;
+    const matchingProjects = PROJECTS.filter(p => p.name.toLowerCase().includes(projQuery));
+    matchingProjects.sort((a, b) => {
+      const ea = s.enabledProjects[a.id] !== false, eb = s.enabledProjects[b.id] !== false;
+      return ea === eb ? 0 : (ea ? -1 : 1);
+    });
+    const PROJECT_LIST_CAP = 8;
+    const projectListHiddenCount = Math.max(0, matchingProjects.length - PROJECT_LIST_CAP);
+    const projectToggles = matchingProjects.slice(0, PROJECT_LIST_CAP).map(p => {
+      const enabled = s.enabledProjects[p.id] !== false;
+      return {
+        id: p.id, name: p.name, enabled,
+        trackStyle: {width:'36px', height:'20px', borderRadius:'10px', position:'relative', cursor:'pointer', border:'none', padding:'0', background: enabled ? COLOR.accent : COLOR.border, transition:'background .15s', flexShrink:0},
+        knobStyle: {width:'16px', height:'16px', borderRadius:'50%', background:COLOR.white, position:'absolute', top:'2px', left: enabled?'18px':'2px', transition:'left .15s', boxShadow:'0 1px 2px oklch(0 0 0 / 0.2)'},
+        onToggle: () => this.toggleProjectEnabled(p.id),
+      };
+    });
+
+    const workingDaysView = DAY_KEYS.map((k,i) => {
+      const wd = s.workingWeek[k];
+      return {
+        key: k, label: DAY_FULL[i], hoursDisplay: String(wd.hours), hoursDisabled: !wd.active, active: wd.active,
+        trackStyle: {width:'36px', height:'20px', borderRadius:'10px', position:'relative', cursor:'pointer', border:'none', padding:'0', background: wd.active ? COLOR.accent : COLOR.border, transition:'background .15s', flexShrink:0},
+        knobStyle: {width:'16px', height:'16px', borderRadius:'50%', background:COLOR.white, position:'absolute', top:'2px', left: wd.active?'18px':'2px', transition:'left .15s', boxShadow:'0 1px 2px oklch(0 0 0 / 0.2)'},
+        onToggle: () => this.toggleDayActive(k),
+        onHours: (e) => this.setDayHours(k, e.target.value),
+      };
+    });
+
+    const dayHeaders = days.map(d => ({
+      key:d.key, label:d.label, dateLabel:d.dateLabel,
+      style: {padding:'8px 4px', textAlign:'center', color: d.active?COLOR.textSecondary:COLOR.textMuted, opacity: d.active?1:0.55},
+    }));
+
+    const statusPillStyle = {background:statusMeta.bg, color:statusMeta.fg, padding:'5px 12px', borderRadius:'100px', fontSize:'12.5px', fontWeight:'700', display:'inline-flex', alignItems:'center', whiteSpace:'nowrap'};
+    const submitButtonStyle = {padding:'11px 22px', border:'none', borderRadius:'9px', fontSize:'14px', fontWeight:'700',
+      background: submitDisabled ? COLOR.disabledBg : COLOR.accent, color: submitDisabled ? COLOR.textMuted : 'white',
+      cursor: submitDisabled ? 'not-allowed' : 'pointer'};
+
+    const selfMember = {
+      id:'self', name:'Morgan Lee (You)', initials:'ML',
+      avatarStyle: {width:'32px',height:'32px',borderRadius:'50%',background:COLOR.accentTint,color:COLOR.accentTintText,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:'700',fontSize:'12.5px',flexShrink:'0'},
+      statusPillStyle: {background:statusMeta.bg, color:statusMeta.fg, padding:'5px 12px', borderRadius:'100px', fontSize:'12px', fontWeight:'700', display:'inline-flex', alignItems:'center', whiteSpace:'nowrap'},
+      statusLabel: statusMeta.label,
+      totalDisplay: fmtHoursOrZero(weekTotalActual), targetDisplay: fmtHoursOrZero(weekTarget),
+      submittedAtLabel: wk.submittedAt ? formatSubmittedAt(wk.submittedAt) : 'Not submitted yet',
+      expanded: s.expandedMemberId === 'self', onToggleExpand: () => this.toggleExpand('self'),
+      rowsView: s.expandedMemberId === 'self' ? rows : [],
+    };
+    const teamMembers = s.team.map((m, idx) => {
+      const mwk = this.getMemberWeekData(m, s.currentWeekStart);
+      const mRowsView = this.buildRowsView({rows: mwk.rows}, days, true);
+      const mTotal = mwk.rows.reduce((sum,r) => sum + DAY_KEYS.reduce((s2,k)=>s2+(r.hours[k]||0),0), 0);
+      const meta = STATUS_META[mwk.status];
+      const hue = AVATAR_HUES[idx % AVATAR_HUES.length];
+      return {
+        id:m.id, name:m.name, initials: initialsOf(m.name),
+        avatarStyle: {width:'32px',height:'32px',borderRadius:'50%',background:'oklch(0.9 0.035 '+hue+')',color:'oklch(0.38 0.13 '+hue+')',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:'700',fontSize:'12.5px',flexShrink:'0'},
+        statusPillStyle: {background:meta.bg, color:meta.fg, padding:'5px 12px', borderRadius:'100px', fontSize:'12px', fontWeight:'700', display:'inline-flex', alignItems:'center', whiteSpace:'nowrap'},
+        statusLabel: meta.label,
+        totalDisplay: fmtHoursOrZero(mTotal), targetDisplay: fmtHoursOrZero(weekTarget),
+        submittedAtLabel: mwk.submittedAt ? formatSubmittedAt(mwk.submittedAt) : 'Not submitted yet',
+        expanded: s.expandedMemberId === m.id, onToggleExpand: () => this.toggleExpand(m.id),
+        rowsView: s.expandedMemberId === m.id ? mRowsView : [],
+      };
+    });
+    const members = [selfMember, ...teamMembers];
+
+    const submittedCount = s.team.filter(m => this.getMemberWeekData(m, s.currentWeekStart).status === 'submitted').length;
+    const hoursLogged = s.team.reduce((sum,m) => { const mwk = this.getMemberWeekData(m, s.currentWeekStart); return sum + DAY_KEYS.reduce((s2,k) => s2 + mwk.rows.reduce((s3,r)=>s3+(r.hours[k]||0),0), 0); }, 0);
+    const hoursTarget = weekTarget * s.team.length;
+    const teamStats = {
+      submittedCount, totalOthers: s.team.length,
+      hoursLoggedDisplay: fmtHoursOrZero(hoursLogged), hoursTargetDisplay: fmtHoursOrZero(hoursTarget),
+    };
+
+    const activeTabKey = isTeamTab ? 'team' : (isHistoryTab ? 'history' : 'mine');
+    const tabStyleFor = (active) => ({
+      padding:'7px 16px', border:'none', borderRadius:'7px', fontSize:'13.5px', fontWeight: active?'700':'600',
+      cursor:'pointer', background: active ? COLOR.accent : 'transparent', color: active ? 'white' : COLOR.textSecondary,
+    });
+    const filterStyleFor = (active) => ({
+      padding:'6px 12px', border:'none', borderRadius:'6px', fontSize:'12.5px', fontWeight: active?'700':'600',
+      cursor:'pointer', background: active ? COLOR.accent : 'transparent', color: active ? 'white' : COLOR.textSecondary,
+    });
+    const currentWeekWk = this.getWeekData(todayMonday);
+    const hasUnsubmittedCurrent = currentWeekWk.status !== 'submitted';
+    const dotStyleFor = (active) => ({display:'inline-block', width:'6px', height:'6px', borderRadius:'50%', marginLeft:'6px', verticalAlign:'middle', background: active ? 'white' : COLOR.accent});
+    const navTabs = [
+      {key:'mine', label:'My Time', onClick: () => this.switchTab('mine'), style: tabStyleFor(activeTabKey==='mine'), showDot: hasUnsubmittedCurrent, dotStyle: dotStyleFor(activeTabKey==='mine')},
+      {key:'history', label:'My History', onClick: () => this.switchTab('history'), style: tabStyleFor(activeTabKey==='history')},
+    ];
+    if (showTeamTab) navTabs.push({key:'team', label:'My Team', onClick: () => this.switchTab('team'), style: tabStyleFor(activeTabKey==='team')});
+
+    const periodDefs = [{key:'4w',label:'4 weeks'},{key:'8w',label:'8 weeks'},{key:'12w',label:'12 weeks'},{key:'all',label:'All time'}];
+    const periodOptions = periodDefs.map(p => ({key:p.key, label:p.label, onClick: () => this.setDashboardPeriod(p.key), style: filterStyleFor(s.dashboardPeriod===p.key)}));
+    const scopeDefs = [{key:'all',label:'All entries'},{key:'projectsOnly',label:'Projects only'},{key:'nonProjectOnly',label:'Non-project only'}];
+    const scopeOptions = scopeDefs.map(sc => ({key:sc.key, label:sc.label, onClick: () => this.setDashboardScope(sc.key), style: filterStyleFor(s.dashboardScope===sc.key)}));
+    const dash = this.buildDashboardData(s.dashboardPeriod, s.dashboardScope);
+    const teamPeriodOptions = periodDefs.map(p => ({key:p.key, label:p.label, onClick: () => this.setTeamDashboardPeriod(p.key), style: filterStyleFor(s.teamDashboardPeriod===p.key)}));
+    const teamScopeOptions = scopeDefs.map(sc => ({key:sc.key, label:sc.label, onClick: () => this.setTeamDashboardScope(sc.key), style: filterStyleFor(s.teamDashboardScope===sc.key)}));
+    const teamDash = this.buildTeamBreakdown(s.teamDashboardPeriod, s.teamDashboardScope);
+
+    const historyRows = Object.keys(s.weeks)
+      .filter(ws => s.weeks[ws].rows.length > 0)
+      .sort((a, b) => b.localeCompare(a))
+      .map(ws => {
+        const wkX = s.weeks[ws];
+        const daysX = this.dayMeta(ws);
+        const totalX = daysX.reduce((sum, d) => sum + wkX.rows.reduce((s2, r) => s2 + (r.hours[d.key]||0), 0), 0);
+        const targetX = daysX.reduce((sum, d) => sum + d.target, 0);
+        const metaX = STATUS_META[wkX.status];
+        return {
+          weekStart: ws, isCurrentWeek: ws === s.currentWeekStart,
+          rangeLabel: this.weekRangeLabel(ws),
+          statusLabel: metaX.label,
+          statusPillStyle: {background:metaX.bg, color:metaX.fg, padding:'5px 12px', borderRadius:'100px', fontSize:'12px', fontWeight:'700', display:'inline-flex', alignItems:'center', whiteSpace:'nowrap'},
+          totalDisplay: fmtHoursOrZero(totalX), targetDisplay: fmtHoursOrZero(targetX),
+          submittedAtLabel: wkX.submittedAt ? formatSubmittedAt(wkX.submittedAt) : 'Not submitted',
+          hasNote: !!wkX.note, noteSnippet: wkX.note || '',
+          onOpen: () => this.openHistoryWeek(ws),
+        };
+      });
+    const hasHistory = historyRows.length > 0;
+
+    return {
+      isMineTab, isTeamTab, isHistoryTab, showTeamTab, navTabs,
+      userInitials:'ML', userName:'Morgan Lee',
+      settingsOpen: s.settingsOpen, openSettings: () => this.openSettings(), closeSettings: () => this.closeSettings(),
+      workingDaysView, applyStandardHoursToAll: () => this.applyStandardHoursToAll(),
+      weekRangeLabel: this.weekRangeLabel(s.currentWeekStart),
+      showTodayButton: s.currentWeekStart !== todayMonday,
+      goPrevWeek: () => this.goPrevWeek(), goNextWeek: () => this.goNextWeek(), goToday: () => this.goToday(),
+      statusPillStyle, statusLabel: statusMeta.label,
+      weekTotalDisplay: fmtHoursOrZero(weekTotalActual), weekTargetDisplay: fmtHoursOrZero(weekTarget),
+      remainingLabel, progressBarInnerStyle: {width: progressPct+'%', height:'100%', borderRadius:'4px', background:COLOR.accent, transition:'width .2s'},
+      dayHeaders, rows, footerDays: fDays, hasRows: rows.length > 0, noRows: rows.length === 0,
+      needsWorkingWeekSetup, isWide: !s.isNarrowViewport, isNarrow: s.isNarrowViewport,
+      addPickerOpen: s.addPickerOpen, toggleAddPicker: () => this.toggleAddPicker(),
+      addPickerQuery: s.addPickerQuery, setAddPickerQuery: (e) => this.setAddPickerQuery(e),
+      addProjects, addCategories, hasAddProjects: addProjects.length>0, hasAddCategories: addCategories.length>0,
+      noAddMatches: addProjects.length===0 && addCategories.length===0,
+      copyLastWeek: () => this.copyLastWeek(),
+      projectToggles, enabledProjectCount,
+      projectAdminQuery: s.projectAdminQuery, setProjectAdminQuery: (e) => this.setProjectAdminQuery(e),
+      hasHiddenProjects: projectListHiddenCount > 0, projectListHiddenCount,
+      categoryAdminOpen: s.categoryAdminOpen, openCategoryAdmin: () => this.openCategoryAdmin(), closeCategoryAdmin: () => this.closeCategoryAdmin(),
+      categoryAdminRows, newCategoryName: s.newCategoryName, setNewCategoryName: (e) => this.setNewCategoryName(e),
+      addCategory: () => this.addCategory(), addCategoryDisabled, addCategoryButtonStyle,
+      teamAdminOpen: s.teamAdminOpen, openTeamAdmin: () => this.openTeamAdmin(), closeTeamAdmin: () => this.closeTeamAdmin(),
+      teamAdminRows, newMemberName: s.newMemberName, setNewMemberName: (e) => this.setNewMemberName(e),
+      addTeamMember: () => this.addTeamMember(), addMemberDisabled, addMemberButtonStyle,
+      isAdmin: this.props.isAdmin ?? true,
+      connectionsOpen: s.connectionsOpen, openConnections: () => this.openConnections(), closeConnections: () => this.closeConnections(),
+      adoOrgUrl: s.adoOrgUrl, setAdoOrgUrl: (e) => this.setAdoOrgUrl(e),
+      adoProjectName: s.adoProjectName, setAdoProjectName: (e) => this.setAdoProjectName(e),
+      adoPat: s.adoPat, setAdoPat: (e) => this.setAdoPat(e),
+      adoStatusPillStyle, adoStatusLabel, testAdoConnection: () => this.testAdoConnection(), testAdoDisabled, testAdoButtonStyle,
+      storageProviderOptions, storageTarget: s.storageTarget, setStorageTarget: (e) => this.setStorageTarget(e),
+      storageTargetLabel: activeStorageProvider.targetLabel, storageTargetPlaceholder: activeStorageProvider.targetPlaceholder,
+      saveConnections: () => this.saveConnections(),
+      fillRemaining: () => this.fillRemainingHours(), fillRemainingDisabled, fillRemainingButtonStyle,
+      weekNoteValue: wk.note || '', setWeekNote: (e) => this.setWeekNote(e.target.value), weekNoteDisabled: locked, weekNoteStyle,
+      showSubmitButton: wk.status === 'draft', submitDisabled, submitButtonStyle, onSubmit: () => this.attemptSubmit(mismatchDays.length, isFutureWeek), submitHelperText,
+      showEditButton: wk.status === 'submitted', onEdit: () => this.editWeek(),
+      isFutureWeek, hasMismatch: mismatchDays.length > 0,
+      confirmSubmitOpen: s.confirmSubmitOpen, confirmSubmitLines, confirmSubmitAnyway: () => this.confirmSubmitAnyway(), cancelConfirmSubmit: () => this.cancelConfirmSubmit(),
+      stepValue: this.getStep(),
+      selectAllOnFocus: (e) => e.target.select(),
+      stopPropagation: (e) => e.stopPropagation(),
+      teamStats, members,
+      historyRows, hasHistory, noHistory: !hasHistory,
+      periodOptions, scopeOptions,
+      dashTotalHoursDisplay: dash.totalHoursDisplay, dashAvgPerWeekDisplay: dash.avgPerWeekDisplay,
+      dashWeeksSubmitted: dash.weeksSubmitted, dashWeeksInRange: dash.weeksInRange,
+      dashNotSubmitted: dash.weeksInRange - dash.weeksSubmitted, hasDashNotSubmitted: (dash.weeksInRange - dash.weeksSubmitted) > 0,
+      dashBreakdown: dash.breakdown, hasDashBreakdown: dash.breakdown.length > 0, noDashBreakdown: dash.breakdown.length === 0,
+      teamPeriodOptions, teamScopeOptions, teamDashBreakdown: teamDash.breakdown,
+      hasTeamDashBreakdown: teamDash.breakdown.length > 0, noTeamDashBreakdown: teamDash.breakdown.length === 0,
+      toast: s.toast,
+    };
+  }
+}
+</script>
+</body>
+</html>

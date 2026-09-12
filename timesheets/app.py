@@ -1,0 +1,790 @@
+"""Weekly Timesheet — a Streamlit port of the Claude Design handoff.
+
+Single-user app (no login) with a fake "team" roster so the My Team tab has
+something to show. Data is stored in a local JSON file next to this script,
+which is a reasonable stand-in for the design's browser localStorage — but
+note the caveat in README.md about Streamlit Community Cloud's storage being
+ephemeral across redeploys. The Manage Connections panel (Azure DevOps +
+storage provider) is a UI placeholder exactly as designed: it records what
+you type but doesn't call any real API.
+"""
+
+import json
+
+import streamlit as st
+
+import lib
+
+st.set_page_config(page_title="Weekly Timesheet", page_icon="\U0001f5d3", layout="wide")
+
+# ---------------------------------------------------------------------------
+# Style
+# ---------------------------------------------------------------------------
+C = lib.COLOR
+st.markdown(
+    f"""
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+      html, body, [class*="css"] {{ font-family: 'Public Sans', system-ui, sans-serif; }}
+      .stApp {{ background: {C['page_bg']}; }}
+      .block-container {{ max-width: 1180px; }}
+      .ts-mono {{ font-family: 'Space Mono', monospace; }}
+      .ts-pill {{ display:inline-flex; align-items:center; padding:5px 12px; border-radius:100px;
+                  font-size:12.5px; font-weight:700; white-space:nowrap; }}
+      .ts-card {{ background:{C['white']}; border:1px solid {C['border']}; border-radius:12px; padding:14px 16px; }}
+      .ts-bar-track {{ height:8px; background:{C['disabled_bg']}; border-radius:4px; overflow:hidden; }}
+      .ts-bar-fill {{ height:100%; border-radius:4px; }}
+      .ts-muted {{ color:{C['text_muted']}; font-size:13px; }}
+      .ts-section-label {{ font-size:11.5px; font-weight:700; color:{C['text_secondary']};
+                            text-transform:uppercase; letter-spacing:0.04em; }}
+      div[data-testid="stVerticalBlockBorderWrapper"] {{ border-radius: 12px; }}
+      button[kind="secondary"] {{ border-color: {C['border']} !important; }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+def pill(label: str, bg: str, fg: str) -> str:
+    return f'<span class="ts-pill" style="background:{bg};color:{fg};">{lib.esc(label)}</span>'
+
+
+def bar(name: str, hours_display: str, pct: int, kind: str) -> str:
+    fill_color = C["accent"] if kind == "project" else C["category_bar"]
+    return f"""
+    <div style="margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px;">
+        <div style="font-weight:600;">{lib.esc(name)}</div>
+        <div class="ts-mono" style="font-weight:700;color:{C['text_secondary']};">{hours_display}h &middot; {pct}%</div>
+      </div>
+      <div class="ts-bar-track"><div class="ts-bar-fill" style="width:{pct}%;background:{fill_color};"></div></div>
+    </div>
+    """
+
+
+# ---------------------------------------------------------------------------
+# State
+# ---------------------------------------------------------------------------
+if "data" not in st.session_state:
+    st.session_state.data = lib.load_persisted()
+
+_DEFAULTS = {
+    "current_week": lib.today_monday(),
+    "active_tab": "My Time",
+    "confirm_submit_open": False,
+    "settings_open": False,
+    "category_admin_open": False,
+    "team_admin_open": False,
+    "connections_open": False,
+    "new_category_name": "",
+    "new_member_name": "",
+    "project_admin_query": "",
+    "add_query": "",
+    "is_admin": True,
+    "ado_pat": "",  # session-only: never written to disk
+}
+for _k, _v in _DEFAULTS.items():
+    st.session_state.setdefault(_k, _v)
+
+data = st.session_state.data
+
+
+def save() -> None:
+    lib.persist(data)
+
+
+# ---------------------------------------------------------------------------
+# Mutators (used as on_click callbacks so they may safely prime the
+# session_state of OTHER already-instantiated widgets before the next rerun)
+# ---------------------------------------------------------------------------
+def add_row(kind: str, ref_id: str, name: str) -> None:
+    week = lib.get_week(data, st.session_state.current_week)
+    if any(r["ref_id"] == ref_id for r in week["rows"]):
+        return
+    week["rows"].append({"id": lib.new_id("row"), "kind": kind, "ref_id": ref_id, "name": name, "hours": lib.empty_hours()})
+    st.session_state.add_query = ""
+    save()
+
+
+def remove_row(row_id: str) -> None:
+    week = lib.get_week(data, st.session_state.current_week)
+    week["rows"] = [r for r in week["rows"] if r["id"] != row_id]
+    save()
+
+
+def fill_row_evenly(row_id: str) -> None:
+    week_start = st.session_state.current_week
+    week = lib.get_week(data, week_start)
+    if week["status"] == "submitted":
+        return
+    row = next((r for r in week["rows"] if r["id"] == row_id), None)
+    if not row:
+        return
+    days = lib.day_meta(week_start, data["working_week"])
+    active = [d for d in days if d["active"]]
+    existing = next((row["hours"][d["key"]] for d in active if row["hours"][d["key"]] > 0), None)
+    if not existing:
+        st.toast("Enter a value first")
+        return
+    for d in active:
+        row["hours"][d["key"]] = existing
+        st.session_state[f"cell_{row_id}_{d['key']}"] = existing
+    save()
+    st.toast(f"Applied {lib.fmt_hours(existing)}h to all active days")
+
+
+def fill_remaining() -> None:
+    week_start = st.session_state.current_week
+    week = lib.get_week(data, week_start)
+    if week["status"] == "submitted" or not week["rows"]:
+        return
+    days = lib.day_meta(week_start, data["working_week"])
+    first = week["rows"][0]
+    changed = False
+    for d in days:
+        if not d["active"]:
+            continue
+        total_other = sum(r["hours"][d["key"]] for r in week["rows"] if r["id"] != first["id"])
+        remaining = d["target"] - total_other - first["hours"][d["key"]]
+        if remaining > 0:
+            first["hours"][d["key"]] += remaining
+            st.session_state[f"cell_{first['id']}_{d['key']}"] = first["hours"][d["key"]]
+            changed = True
+    if not changed:
+        st.toast("Nothing to fill")
+        return
+    save()
+    st.toast(f"Filled remaining hours into {first['name']}")
+
+
+def copy_last_week() -> None:
+    week_start = st.session_state.current_week
+    prev = lib.get_week(data, lib.shift_date(week_start, -7))
+    if not prev["rows"]:
+        st.toast("No projects logged last week")
+        return
+    week = lib.get_week(data, week_start)
+    existing_refs = {r["ref_id"] for r in week["rows"]}
+    to_add = [
+        {"id": lib.new_id("row"), "kind": r["kind"], "ref_id": r["ref_id"], "name": r["name"], "hours": lib.empty_hours()}
+        for r in prev["rows"] if r["ref_id"] not in existing_refs
+    ]
+    if not to_add:
+        st.toast("Already added those projects")
+        return
+    week["rows"].extend(to_add)
+    save()
+    st.toast(f"Copied {len(to_add)} project{'s' if len(to_add) > 1 else ''} from last week")
+
+
+def submit_week() -> None:
+    from datetime import datetime
+    week = lib.get_week(data, st.session_state.current_week)
+    week["status"] = "submitted"
+    week["submitted_at"] = datetime.now().isoformat(timespec="seconds")
+    save()
+    st.toast("Submitted for approval")
+
+
+def edit_week() -> None:
+    week = lib.get_week(data, st.session_state.current_week)
+    week["status"] = "draft"
+    save()
+
+
+def apply_standard_hours() -> None:
+    for k in lib.DAY_KEYS:
+        if data["working_week"][k]["active"]:
+            data["working_week"][k]["hours"] = 7.5
+            st.session_state[f"wwhours_{k}"] = 7.5
+    save()
+
+
+def add_category() -> None:
+    name = st.session_state.new_category_name.strip()
+    if not name:
+        return
+    data["categories"].append({"id": lib.new_id("cat"), "name": name})
+    st.session_state.new_category_name = ""
+    save()
+
+
+def remove_category(cat_id: str) -> None:
+    data["categories"] = [c for c in data["categories"] if c["id"] != cat_id]
+    save()
+
+
+def add_team_member() -> None:
+    name = st.session_state.new_member_name.strip()
+    if not name:
+        return
+    data["team"].append({"id": lib.new_id("member"), "name": name, "weeks": {}})
+    st.session_state.new_member_name = ""
+    save()
+
+
+def remove_team_member(member_id: str) -> None:
+    data["team"] = [m for m in data["team"] if m["id"] != member_id]
+    save()
+
+
+def open_history_week(week_start: str) -> None:
+    st.session_state.current_week = week_start
+    st.session_state["_pending_tab"] = "My Time"
+
+
+def test_ado_connection() -> None:
+    conn = data["connections"]
+    if not (conn["ado_org_url"].strip() and conn["ado_project_name"].strip() and st.session_state.ado_pat.strip()):
+        st.toast("Fill in organization URL, project, and token first")
+        return
+    conn["ado_connected"] = True
+    save()
+    st.toast("Connected to Azure DevOps")
+
+
+# ---------------------------------------------------------------------------
+# Dialogs
+# ---------------------------------------------------------------------------
+@st.dialog("My working week")
+def settings_dialog():
+    st.caption("Used to check each day adds up before you submit. Saved automatically.")
+    for i, k in enumerate(lib.DAY_KEYS):
+        wd = data["working_week"][k]
+        c1, c2, c3 = st.columns([0.4, 2, 1])
+        active_key = f"wwactive_{k}"
+        extra_a = {} if active_key in st.session_state else {"value": wd["active"]}
+        active = c1.checkbox(" ", key=active_key, label_visibility="collapsed", **extra_a)
+        wd["active"] = active
+        c2.markdown(lib.DAY_FULL[i])
+        hours_key = f"wwhours_{k}"
+        # apply_standard_hours() primes this key directly; see the cell input above for why
+        # `value=` is conditional.
+        extra_h = {} if hours_key in st.session_state else {"value": float(wd["hours"])}
+        hours = c3.number_input(
+            "hours", min_value=0.0, max_value=24.0, step=0.5,
+            key=hours_key, disabled=not active, label_visibility="collapsed", **extra_h,
+        )
+        wd["hours"] = hours
+    save()
+
+    st.divider()
+    enabled_count = sum(1 for p in lib.PROJECTS if data["enabled_projects"].get(p["id"], True))
+    st.markdown(f"**My projects**  \n<span class='ts-muted'>Choose which projects appear in your Add project list &mdash; {enabled_count} enabled.</span>", unsafe_allow_html=True)
+    query = st.text_input("Search projects", key="project_admin_query", placeholder="Search projects...", label_visibility="collapsed")
+    q = query.strip().lower()
+    matching = [p for p in lib.PROJECTS if q in p["name"].lower()]
+    matching.sort(key=lambda p: not data["enabled_projects"].get(p["id"], True))
+    cap = 8
+    for p in matching[:cap]:
+        c1, c2 = st.columns([0.4, 2])
+        enabled = c1.checkbox(" ", value=data["enabled_projects"].get(p["id"], True), key=f"projtoggle_{p['id']}", label_visibility="collapsed")
+        data["enabled_projects"][p["id"]] = enabled
+        c2.markdown(p["name"])
+    if len(matching) > cap:
+        st.caption(f"+{len(matching) - cap} more — keep typing to find them.")
+    save()
+
+    c1, c2 = st.columns([2, 1])
+    c1.button("Set all active days to 7.5h", on_click=apply_standard_hours)
+    if c2.button("Done", type="primary", use_container_width=True):
+        st.session_state.settings_open = False
+        st.rerun()
+
+
+@st.dialog("Non-project time categories")
+def category_dialog():
+    st.caption("These appear alongside projects in everyone's Add picker.")
+    for c in data["categories"]:
+        c1, c2 = st.columns([5, 1])
+        c1.markdown(f"<div class='ts-card' style='padding:8px 10px;'>{lib.esc(c['name'])}</div>", unsafe_allow_html=True)
+        c2.button("✕", key=f"rmcat_{c['id']}", on_click=remove_category, args=(c["id"],))
+    c1, c2 = st.columns([3, 1])
+    c1.text_input("New category", key="new_category_name", placeholder="New category name...", label_visibility="collapsed")
+    c2.button("Add", on_click=add_category, disabled=not st.session_state.new_category_name.strip())
+    if st.button("Done", type="primary"):
+        st.session_state.category_admin_open = False
+        st.rerun()
+
+
+@st.dialog("Team members")
+def team_admin_dialog():
+    st.caption("People who show up in your Team rollup.")
+    for m in data["team"]:
+        c1, c2 = st.columns([5, 1])
+        c1.markdown(f"<div class='ts-card' style='padding:8px 10px;'>{lib.esc(m['name'])}</div>", unsafe_allow_html=True)
+        c2.button("✕", key=f"rmmem_{m['id']}", on_click=remove_team_member, args=(m["id"],))
+    c1, c2 = st.columns([3, 1])
+    c1.text_input("New member", key="new_member_name", placeholder="New team member name...", label_visibility="collapsed")
+    c2.button("Add", on_click=add_team_member, disabled=not st.session_state.new_member_name.strip())
+    if st.button("Done", type="primary"):
+        st.session_state.team_admin_open = False
+        st.rerun()
+
+
+@st.dialog("Manage connections")
+def connections_dialog():
+    st.caption("Admin only. This panel is a design placeholder — it records what you enter but doesn't call a real API yet.")
+    conn = data["connections"]
+    st.markdown("<div class='ts-section-label'>Azure DevOps</div>", unsafe_allow_html=True)
+    conn["ado_org_url"] = st.text_input("Organization URL", value=conn["ado_org_url"], placeholder="https://dev.azure.com/yourorg")
+    conn["ado_project_name"] = st.text_input("Project name", value=conn["ado_project_name"], placeholder="e.g. Platform")
+    st.text_input("Personal access token", key="ado_pat", type="password", placeholder="Paste PAT (not saved between sessions)")
+    c1, c2 = st.columns([1, 1])
+    if conn["ado_connected"]:
+        c1.markdown(pill("Connected", C["success_tint"], C["success_text"]), unsafe_allow_html=True)
+    else:
+        c1.markdown(pill("Not connected", C["danger_tint"], C["danger"]), unsafe_allow_html=True)
+    c2.button("Test connection", on_click=test_ado_connection)
+
+    st.divider()
+    st.markdown("<div class='ts-section-label'>Data storage</div>", unsafe_allow_html=True)
+    st.caption("Where submitted timesheet entries would be written.")
+    provider_labels = [p["label"] for p in lib.STORAGE_PROVIDERS]
+    current_provider = next(p for p in lib.STORAGE_PROVIDERS if p["key"] == conn["storage_provider"])
+    chosen = st.radio("Storage provider", provider_labels, index=provider_labels.index(current_provider["label"]), label_visibility="collapsed")
+    chosen_provider = next(p for p in lib.STORAGE_PROVIDERS if p["label"] == chosen)
+    conn["storage_provider"] = chosen_provider["key"]
+    conn["storage_target"] = st.text_input(chosen_provider["target_label"], value=conn["storage_target"], placeholder=chosen_provider["target_placeholder"])
+
+    c1, c2 = st.columns([1, 1])
+    if c1.button("Cancel", use_container_width=True):
+        st.session_state.connections_open = False
+        st.rerun()
+    if c2.button("Save", type="primary", use_container_width=True):
+        save()
+        st.toast("Connection settings saved")
+        st.session_state.connections_open = False
+        st.rerun()
+
+
+@st.dialog("Check before you submit")
+def confirm_submit_dialog(mismatch_lines, is_future_week, week_range):
+    if is_future_week:
+        st.info(f"This is a future week ({week_range}). You're submitting hours ahead of time.")
+    if mismatch_lines:
+        st.write("You can still submit, but check these days first:")
+        for line in mismatch_lines:
+            c1, c2 = st.columns([1, 1])
+            c1.markdown(f"**{line['label']}**")
+            c2.markdown(f"<div class='ts-mono' style='text-align:right;'>{line['detail']}</div>", unsafe_allow_html=True)
+    c1, c2 = st.columns([1, 1])
+    if c1.button("Go back", use_container_width=True):
+        st.session_state.confirm_submit_open = False
+        st.rerun()
+    if c2.button("Submit anyway", type="primary", use_container_width=True):
+        submit_week()
+        st.session_state.confirm_submit_open = False
+        st.rerun()
+
+
+if st.session_state.settings_open:
+    settings_dialog()
+if st.session_state.category_admin_open:
+    category_dialog()
+if st.session_state.team_admin_open:
+    team_admin_dialog()
+if st.session_state.connections_open:
+    connections_dialog()
+
+# A widget's session_state key can't be reassigned after that widget has
+# already been drawn this run, so a request to switch tabs (e.g. from the
+# History "Open" button) is queued here and applied before the nav widget
+# below is instantiated, rather than set directly from the button handler.
+if "_pending_tab" in st.session_state:
+    st.session_state.active_tab = st.session_state.pop("_pending_tab")
+
+# ---------------------------------------------------------------------------
+# Top bar
+# ---------------------------------------------------------------------------
+top_l, top_m, top_r = st.columns([2, 3, 2])
+with top_l:
+    st.markdown(
+        f"""<div style="display:flex;align-items:center;gap:12px;">
+        <div style="width:38px;height:38px;border-radius:10px;background:{C['accent']};color:white;
+                    display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;">WT</div>
+        <div style="font-size:18px;font-weight:700;">My Time</div></div>""",
+        unsafe_allow_html=True,
+    )
+with top_m:
+    active_tab = st.segmented_control(
+        "Navigation", ["My Time", "My History", "My Team"],
+        key="active_tab", label_visibility="collapsed",
+    )
+with top_r:
+    c1, c2 = st.columns([1, 4])
+    if c1.button("⚙", help="My working week"):
+        st.session_state.settings_open = True
+        st.rerun()
+    c2.markdown(
+        f"""<div style="display:flex;align-items:center;gap:8px;height:100%;">
+        <div style="width:32px;height:32px;border-radius:50%;background:{C['accent_tint']};color:{C['accent_tint_text']};
+                    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12.5px;">ML</div>
+        <div style="font-size:13.5px;font-weight:600;">Morgan Lee</div></div>""",
+        unsafe_allow_html=True,
+    )
+
+active_tab = active_tab or "My Time"
+current_week = st.session_state.current_week
+days = lib.day_meta(current_week, data["working_week"])
+week = lib.get_week(data, current_week)
+locked = week["status"] == "submitted"
+is_future_week = current_week > lib.today_monday()
+
+# ---------------------------------------------------------------------------
+# My Time
+# ---------------------------------------------------------------------------
+if active_tab == "My Time":
+    nav1, nav2, nav3, nav4, nav5 = st.columns([0.5, 2, 0.5, 0.7, 3])
+    if nav1.button("‹"):
+        st.session_state.current_week = lib.shift_date(current_week, -7)
+        st.rerun()
+    nav2.markdown(f"<div style='text-align:center;font-weight:700;font-size:15px;padding-top:6px;'>{lib.week_range_label(current_week)}</div>", unsafe_allow_html=True)
+    if nav3.button("›"):
+        st.session_state.current_week = lib.shift_date(current_week, 7)
+        st.rerun()
+    if current_week != lib.today_monday():
+        if nav4.button("Today"):
+            st.session_state.current_week = lib.today_monday()
+            st.rerun()
+    meta = lib.STATUS_META[week["status"]]
+    nav5.markdown(f"<div style='text-align:right;'>{pill(meta['label'], meta['bg'], meta['fg'])}</div>", unsafe_allow_html=True)
+
+    week_total = lib.week_total(week)
+    week_target = lib.week_target(days)
+    progress_pct = min(100, round(week_total / week_target * 100)) if week_target > 0 else 0
+    diff = week_target - week_total
+    if week_target == 0:
+        remaining_label = "No working days set"
+    elif diff > 0:
+        remaining_label = f"{lib.fmt_hours(diff)}h remaining"
+    elif diff < 0:
+        remaining_label = f"{lib.fmt_hours(-diff)}h over"
+    else:
+        remaining_label = "All accounted for"
+
+    st.markdown(
+        f"""<div class="ts-card" style="display:flex;align-items:center;gap:16px;margin-top:12px;">
+        <div class="ts-mono" style="font-size:22px;font-weight:700;white-space:nowrap;">{lib.fmt_hours(week_total)}
+          <span style="font-size:13px;color:{C['text_secondary']};font-weight:500;"> / {lib.fmt_hours(week_target)}h</span></div>
+        <div style="flex:1;" class="ts-bar-track"><div class="ts-bar-fill" style="width:{progress_pct}%;background:{C['accent']};"></div></div>
+        <div style="font-size:13px;font-weight:600;color:{C['text_secondary']};white-space:nowrap;">{remaining_label}</div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+    if week_target == 0:
+        wc1, wc2 = st.columns([4, 1])
+        wc1.warning("Set your working week to get started — we'll use it to check your hours each week.")
+        if wc2.button("Set working week"):
+            st.session_state.settings_open = True
+            st.rerun()
+
+    st.write("")
+    b1, b2, b3, b4 = st.columns([1.3, 1.6, 1.6, 5])
+    with b1.popover("+ Add project", disabled=locked):
+        query = st.text_input("Search", key="add_query", placeholder="Search projects...", label_visibility="collapsed")
+        q = query.strip().lower()
+        existing_refs = {r["ref_id"] for r in week["rows"]}
+        add_projects = [p for p in lib.PROJECTS if data["enabled_projects"].get(p["id"], True)
+                        and p["id"] not in existing_refs and q in p["name"].lower()]
+        add_cats = [c for c in data["categories"] if c["id"] not in existing_refs and q in c["name"].lower()]
+        if add_projects:
+            st.caption("PROJECTS")
+            for p in add_projects:
+                st.button(p["name"], key=f"addp_{p['id']}", on_click=add_row, args=("project", p["id"], p["name"]), use_container_width=True)
+        if add_cats:
+            st.caption("LEAVE & OTHER")
+            for c in add_cats:
+                st.button(c["name"], key=f"addc_{c['id']}", on_click=add_row, args=("category", c["id"], c["name"]), use_container_width=True)
+        if not add_projects and not add_cats:
+            st.caption("No matches.")
+    b2.button("Copy last week's projects", on_click=copy_last_week, disabled=locked)
+    b3.button("Fill remaining hours", on_click=fill_remaining, disabled=locked or not week["rows"] or week_target == 0)
+
+    st.write("")
+    mismatch_days = []
+    if not week["rows"]:
+        st.info("No projects added yet. Add one above to get started.")
+    else:
+        widths = [2.1, 0.6] + [1] * 7 + [0.8, 0.4]
+        hdr = st.columns(widths)
+        hdr[0].markdown("<div class='ts-section-label'>Project</div>", unsafe_allow_html=True)
+        for i, d in enumerate(days):
+            color = C["text_secondary"] if d["active"] else C["text_muted"]
+            hdr[2 + i].markdown(
+                f"<div style='text-align:center;color:{color};'><div style='font-size:11.5px;font-weight:700;text-transform:uppercase;'>{d['label']}</div>"
+                f"<div style='font-size:11px;'>{d['date_label']}</div></div>",
+                unsafe_allow_html=True,
+            )
+        hdr[-2].markdown("<div class='ts-section-label' style='text-align:right;'>Total</div>", unsafe_allow_html=True)
+
+        for row in week["rows"]:
+            cols = st.columns(widths)
+            cols[0].markdown(f"**{lib.esc(row['name'])}**")
+            cols[1].button("Even", key=f"even_{row['id']}", on_click=fill_row_evenly, args=(row["id"],),
+                            disabled=locked, help="Apply first day's hours to all active days")
+            for i, d in enumerate(days):
+                cell_key = f"cell_{row['id']}_{d['key']}"
+                # Omit `value=` once the key exists: fill_row_evenly/fill_remaining prime
+                # session_state directly, and passing both makes Streamlit warn.
+                extra = {} if cell_key in st.session_state else {"value": float(row["hours"][d["key"]])}
+                val = cols[2 + i].number_input(
+                    d["label"], min_value=0.0, max_value=24.0, step=0.5, key=cell_key,
+                    disabled=locked or not d["active"], label_visibility="collapsed", **extra,
+                )
+                row["hours"][d["key"]] = val
+            total = lib.row_total(row)
+            cols[-2].markdown(f"<div class='ts-mono' style='text-align:right;font-weight:700;padding-top:8px;'>{lib.fmt_hours(total)}</div>", unsafe_allow_html=True)
+            cols[-1].button("✕", key=f"rm_{row['id']}", on_click=remove_row, args=(row["id"],), disabled=locked)
+        save()
+
+        footer = st.columns(widths)
+        footer[0].markdown("**Total**")
+        for i, d in enumerate(days):
+            day_total = sum(r["hours"][d["key"]] for r in week["rows"])
+            if d["active"]:
+                if day_total == d["target"]:
+                    bg, fg = C["success_tint"], C["success_text"]
+                elif day_total > d["target"]:
+                    bg, fg = C["progress_tint"], C["progress_text"]
+                    mismatch_days.append({"label": d["label"], "total": day_total, "target": d["target"]})
+                else:
+                    bg, fg = C["progress_tint"], C["progress_text"]
+                    mismatch_days.append({"label": d["label"], "total": day_total, "target": d["target"]})
+                display = f"{lib.fmt_hours(day_total)}/{lib.fmt_hours(d['target'])}"
+            else:
+                bg, fg, display = "transparent", C["text_muted"], "—"
+            footer[2 + i].markdown(
+                f"<div class='ts-mono' style='text-align:center;padding:6px 2px;border-radius:6px;background:{bg};color:{fg};font-size:12.5px;font-weight:700;'>{display}</div>",
+                unsafe_allow_html=True,
+            )
+        footer[-2].markdown(f"<div class='ts-mono' style='text-align:right;font-weight:800;'>{lib.fmt_hours(week_total)}/{lib.fmt_hours(week_target)}</div>", unsafe_allow_html=True)
+
+    st.write("")
+    week["note"] = st.text_area(
+        "Anything we should know? (optional)", value=week.get("note", ""),
+        placeholder="e.g. out sick Wednesday afternoon, conference travel...",
+        height=68, disabled=locked, key=f"note_{current_week}",
+    )
+    save()
+
+    st.write("")
+    helper_col, btn_col = st.columns([3, 1])
+    if week["status"] == "submitted":
+        helper_text = f"Submitted {lib.format_submitted_at(week['submitted_at'])}. Locked for editing."
+    elif week_target == 0:
+        helper_text = "Set your working week in Settings first."
+    elif not week["rows"]:
+        helper_text = "Add a project above to get started."
+    elif not mismatch_days:
+        helper_text = "All hours accounted for."
+    elif len(mismatch_days) == 1:
+        helper_text = f"{mismatch_days[0]['label']} looks different from your usual hours."
+    else:
+        helper_text = f"{len(mismatch_days)} days differ from your usual hours: {', '.join(d['label'] for d in mismatch_days)}."
+    helper_col.markdown(f"<div class='ts-muted' style='padding-top:8px;'>{lib.esc(helper_text)}</div>", unsafe_allow_html=True)
+
+    if week["status"] == "draft":
+        submit_disabled = not (week_target > 0 and week["rows"])
+        if btn_col.button("Submit for approval", type="primary", disabled=submit_disabled, use_container_width=True):
+            if not mismatch_days and not is_future_week:
+                submit_week()
+                st.rerun()
+            else:
+                st.session_state.confirm_submit_open = True
+                st.rerun()
+    else:
+        if btn_col.button("Edit", use_container_width=True):
+            edit_week()
+            st.rerun()
+
+    if st.session_state.confirm_submit_open:
+        lines = [{"label": d["label"], "detail": f"{lib.fmt_hours(d['total'])}h logged · {lib.fmt_hours(d['target'])}h usual"} for d in mismatch_days]
+        confirm_submit_dialog(lines, is_future_week, lib.week_range_label(current_week))
+
+# ---------------------------------------------------------------------------
+# My History
+# ---------------------------------------------------------------------------
+elif active_tab == "My History":
+    f1, f2 = st.columns([2, 2])
+    period = f1.segmented_control("Period", lib.PERIOD_OPTIONS, default="8 weeks", key="dashboard_period")
+    scope = f2.segmented_control("Scope", lib.SCOPE_OPTIONS, default="All entries", key="dashboard_scope")
+    period = period or "8 weeks"
+    scope = scope or "All entries"
+
+    week_starts = lib.period_week_starts(period, data)
+    weeks_iter = [data["weeks"][w] for w in week_starts if w in data["weeks"]]
+    breakdown, total_hours = lib.build_breakdown(weeks_iter, scope)
+    weeks_with_data = sum(1 for w in weeks_iter if w["rows"])
+    weeks_submitted = sum(1 for w in weeks_iter if w["status"] == "submitted")
+    avg_per_week = total_hours / weeks_with_data if weeks_with_data else 0
+
+    m1, m2, m3 = st.columns(3)
+    m1.markdown(f"<div class='ts-card'><div class='ts-mono' style='font-size:22px;font-weight:800;'>{lib.fmt_hours(total_hours)}h</div><div class='ts-muted'>Total logged</div></div>", unsafe_allow_html=True)
+    m2.markdown(f"<div class='ts-card'><div class='ts-mono' style='font-size:22px;font-weight:800;'>{lib.fmt_hours(avg_per_week)}h</div><div class='ts-muted'>Avg per week</div></div>", unsafe_allow_html=True)
+    not_submitted = len(week_starts) - weeks_submitted
+    extra = f"<div style='font-size:11.5px;color:{C['danger']};font-weight:700;margin-top:3px;'>{not_submitted} not submitted</div>" if not_submitted > 0 else ""
+    m3.markdown(f"<div class='ts-card'><div class='ts-mono' style='font-size:22px;font-weight:800;'>{weeks_submitted}/{len(week_starts)}</div><div class='ts-muted'>Weeks submitted</div>{extra}</div>", unsafe_allow_html=True)
+
+    st.write("")
+    st.markdown("<div class='ts-card'>", unsafe_allow_html=True)
+    st.markdown("<div class='ts-section-label'>Where your time went</div>", unsafe_allow_html=True)
+    if breakdown:
+        for b in breakdown:
+            st.markdown(bar(b["name"], lib.fmt_hours(b["hours"]), b["pct"], b["kind"]), unsafe_allow_html=True)
+    else:
+        st.caption("No hours logged in this period.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.divider()
+    st.caption("Past weeks you've logged. Select one to view or edit it.")
+    history_weeks = sorted((w for w in data["weeks"] if data["weeks"][w]["rows"]), reverse=True)
+    if not history_weeks:
+        st.info("No timesheet history yet.")
+    else:
+        for ws in history_weeks:
+            wkx = data["weeks"][ws]
+            daysx = lib.day_meta(ws, data["working_week"])
+            totalx = lib.week_total(wkx)
+            targetx = lib.week_target(daysx)
+            metax = lib.STATUS_META[wkx["status"]]
+            c1, c2, c3, c4, c5 = st.columns([2, 2, 1, 1.4, 1.6])
+            c1.markdown(f"**{lib.week_range_label(ws)}**" + (" · *current*" if ws == current_week else ""))
+            c2.caption(wkx.get("note") or "")
+            c3.markdown(pill(metax["label"], metax["bg"], metax["fg"]), unsafe_allow_html=True)
+            c4.markdown(f"<div class='ts-mono' style='text-align:right;'>{lib.fmt_hours(totalx)}/{lib.fmt_hours(targetx)}h</div>", unsafe_allow_html=True)
+            c5.button("Open", key=f"open_{ws}", on_click=open_history_week, args=(ws,), use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# My Team
+# ---------------------------------------------------------------------------
+elif active_tab == "My Team":
+    nav1, nav2, nav3, nav4, nav5, nav6 = st.columns([0.5, 2, 0.5, 0.7, 1.3, 1.5])
+    if nav1.button("‹", key="team_prev"):
+        st.session_state.current_week = lib.shift_date(current_week, -7)
+        st.rerun()
+    nav2.markdown(f"<div style='text-align:center;font-weight:700;font-size:15px;padding-top:6px;'>{lib.week_range_label(current_week)}</div>", unsafe_allow_html=True)
+    if nav3.button("›", key="team_next"):
+        st.session_state.current_week = lib.shift_date(current_week, 7)
+        st.rerun()
+    if current_week != lib.today_monday():
+        if nav4.button("Today", key="team_today"):
+            st.session_state.current_week = lib.today_monday()
+            st.rerun()
+    if nav5.button("Manage team", use_container_width=True):
+        st.session_state.team_admin_open = True
+        st.rerun()
+    if nav6.button("Manage categories", use_container_width=True):
+        st.session_state.category_admin_open = True
+        st.rerun()
+    if st.session_state.is_admin:
+        if st.button("Manage connections"):
+            st.session_state.connections_open = True
+            st.rerun()
+        st.caption("Demo note: this build has no real login/multi-user auth, so every visitor sees the admin view.")
+
+    week_target = lib.week_target(days)
+    submitted_count = sum(1 for m in data["team"] if lib.get_member_week(m, current_week)["status"] == "submitted")
+    hours_logged = sum(lib.week_total(lib.get_member_week(m, current_week)) for m in data["team"])
+    hours_target = week_target * len(data["team"])
+
+    st.write("")
+    s1, s2 = st.columns(2)
+    s1.markdown(f"<div class='ts-card'><div class='ts-mono' style='font-size:22px;font-weight:800;'>{submitted_count}/{len(data['team'])}</div><div class='ts-muted'>Submitted</div></div>", unsafe_allow_html=True)
+    s2.markdown(f"<div class='ts-card'><div class='ts-mono' style='font-size:22px;font-weight:800;'>{lib.fmt_hours(hours_logged)}/{lib.fmt_hours(hours_target)}</div><div class='ts-muted'>Hours logged</div></div>", unsafe_allow_html=True)
+
+    st.write("")
+    self_total = lib.week_total(week)
+    self_meta = lib.STATUS_META[week["status"]]
+    roster = [{
+        "id": "self", "name": "Morgan Lee (You)", "initials": "ML",
+        "avatar_bg": C["accent_tint"], "avatar_fg": C["accent_tint_text"],
+        "status": self_meta, "total": self_total, "target": week_target,
+        "submitted_at": week["submitted_at"], "rows": week["rows"],
+    }]
+    for idx, m in enumerate(data["team"]):
+        mwk = lib.get_member_week(m, current_week)
+        tint, tint_text = lib.AVATAR_TINTS[idx % len(lib.AVATAR_TINTS)]
+        roster.append({
+            "id": m["id"], "name": m["name"], "initials": lib.initials_of(m["name"]),
+            "avatar_bg": tint, "avatar_fg": tint_text,
+            "status": lib.STATUS_META[mwk["status"]], "total": lib.week_total(mwk), "target": week_target,
+            "submitted_at": mwk["submitted_at"], "rows": mwk["rows"],
+        })
+
+    for member in roster:
+        with st.container(border=True):
+            c1, c2, c3, c4, c5 = st.columns([0.5, 2, 1.2, 1.2, 1.6])
+            c1.markdown(f"<div style='width:32px;height:32px;border-radius:50%;background:{member['avatar_bg']};color:{member['avatar_fg']};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12.5px;'>{member['initials']}</div>", unsafe_allow_html=True)
+            c2.markdown(f"**{lib.esc(member['name'])}**")
+            c3.markdown(pill(member["status"]["label"], member["status"]["bg"], member["status"]["fg"]), unsafe_allow_html=True)
+            c4.markdown(f"<div class='ts-mono' style='text-align:right;'>{lib.fmt_hours(member['total'])}/{lib.fmt_hours(member['target'])}h</div>", unsafe_allow_html=True)
+            submitted_label = lib.format_submitted_at(member["submitted_at"])
+            c5.markdown(f"<div class='ts-muted' style='text-align:right;'>{submitted_label}</div>", unsafe_allow_html=True)
+            if member["rows"]:
+                with st.expander("Breakdown"):
+                    for r in member["rows"]:
+                        rt = lib.row_total(r)
+                        if rt <= 0:
+                            continue
+                        breakdown_str = " · ".join(
+                            f"{d['label']} {lib.fmt_hours(r['hours'][d['key']])}"
+                            for d in days if d["active"] and r["hours"][d["key"]] > 0
+                        ) or "No hours logged"
+                        st.markdown(f"**{lib.esc(r['name'])}** &nbsp; <span class='ts-muted'>{breakdown_str}</span> &nbsp; <span class='ts-mono' style='font-weight:700;'>{lib.fmt_hours(rt)}h</span>", unsafe_allow_html=True)
+
+    st.write("")
+    st.markdown("<div class='ts-card'>", unsafe_allow_html=True)
+    tc1, tc2 = st.columns([1, 3])
+    tc1.markdown("<div class='ts-section-label' style='padding-top:6px;'>Team time by project</div>", unsafe_allow_html=True)
+    with tc2:
+        p1, p2 = st.columns(2)
+        team_period = p1.segmented_control("Team period", lib.PERIOD_OPTIONS, default="8 weeks", key="team_period", label_visibility="collapsed")
+        team_scope = p2.segmented_control("Team scope", lib.SCOPE_OPTIONS, default="All entries", key="team_scope", label_visibility="collapsed")
+    team_period = team_period or "8 weeks"
+    team_scope = team_scope or "All entries"
+
+    team_week_starts = lib.period_week_starts(team_period, data, include_team=True)
+    team_weeks_iter = []
+    for ws in team_week_starts:
+        if ws in data["weeks"]:
+            team_weeks_iter.append(data["weeks"][ws])
+        for m in data["team"]:
+            if ws in m.get("weeks", {}):
+                team_weeks_iter.append(m["weeks"][ws])
+    team_breakdown, _ = lib.build_breakdown(team_weeks_iter, team_scope)
+    if team_breakdown:
+        for b in team_breakdown:
+            st.markdown(bar(b["name"], lib.fmt_hours(b["hours"]), b["pct"], b["kind"]), unsafe_allow_html=True)
+    else:
+        st.caption("No hours logged in this period.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# Backup (Community Cloud storage is ephemeral across redeploys/reboots)
+# ---------------------------------------------------------------------------
+with st.sidebar:
+    st.markdown("### Backup")
+    st.caption("This app's storage doesn't reliably survive a redeploy. Download a backup now and then, and restore it after one.")
+    st.download_button(
+        "Download backup (JSON)",
+        data=json.dumps(data, indent=2),
+        file_name="timesheet_backup.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+    uploaded = st.file_uploader("Restore from backup", type="json", label_visibility="collapsed")
+    if uploaded is not None:
+        try:
+            restored = json.loads(uploaded.getvalue())
+            if not isinstance(restored, dict) or not {"weeks", "working_week", "team"} <= restored.keys():
+                raise ValueError("missing expected top-level keys")
+            st.session_state.data = restored
+            lib.persist(restored)
+            st.success("Restored. Reloading…")
+            st.rerun()
+        except ValueError:
+            st.error("That doesn't look like a valid backup file.")

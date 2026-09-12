@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+
+# Per-app local data files (each app's own JSON store)
+**/timesheet_data.json
