@@ -2,9 +2,9 @@
 
 Mirrors the state shape from the original design prototype: timesheet data is
 keyed by ISO Monday-of-week, each week holding a list of rows (a project or a
-non-project category) with per-day hours, a draft/submitted status, and an
-optional note. A small set of fake "team" records lets the My Team tab work
-without a real multi-user backend.
+non-project category) with per-day hours, a draft/submitted/approved status,
+and an optional note. A small set of fake "team" records lets the My Team tab
+work without a real multi-user backend.
 """
 
 from __future__ import annotations
@@ -13,6 +13,9 @@ import copy
 import html
 import json
 import os
+import random
+import re
+import socket
 import uuid
 from datetime import date, datetime, timedelta
 
@@ -34,6 +37,8 @@ COLOR = {
     "accent_tint_text": "#7d1453",
     "success_tint": "#d6f0ff",
     "success_text": "#004f82",
+    "approved_tint": "#dcf3e3",
+    "approved_text": "#0a6631",
     "danger": "#ac1922",
     "danger_tint": "#ffe2de",
     "progress_tint": "#e7f0f8",
@@ -57,6 +62,7 @@ AVATAR_TINTS = [
 STATUS_META = {
     "draft": {"label": "Draft", "bg": "#f0ede9", "fg": "#4c453f"},
     "submitted": {"label": "Submitted", "bg": COLOR["accent_tint"], "fg": COLOR["accent_tint_text"]},
+    "approved": {"label": "Approved", "bg": COLOR["approved_tint"], "fg": COLOR["approved_text"]},
 }
 
 PROJECTS = [
@@ -76,12 +82,46 @@ DEFAULT_CATEGORIES = [
     {"id": "c5", "name": "Internal / Admin Time"},
 ]
 STORAGE_PROVIDERS = [
-    {"key": "azureTable", "label": "Azure Table Storage", "target_label": "Table name",
-     "target_placeholder": "e.g. TimesheetEntries"},
-    {"key": "sharepoint", "label": "SharePoint list", "target_label": "Site URL and list name",
-     "target_placeholder": "https://contoso.sharepoint.com/sites/Ops – Timesheets"},
-    {"key": "sqlDatabase", "label": "SQL database", "target_label": "Connection string",
-     "target_placeholder": "server, database, or connection string"},
+    {
+        "key": "azureTable",
+        "label": "Azure Table Storage",
+        "target_label": "Table name",
+        "target_placeholder": "e.g. TimesheetEntries",
+        "secret_label": "Connection string",
+        "secret_placeholder": "DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net",
+        "guide": [
+            "Azure Portal → your Storage account → **Access keys** → copy the **Connection string** for key1.",
+            "Paste it into the Connection string field above (kept only for this session, never saved to disk).",
+            "The table name above is created automatically the first time data is written if it doesn't exist yet.",
+            "**Live mode** actually lists the tables in that storage account to confirm the credentials work.",
+        ],
+    },
+    {
+        "key": "sharepoint",
+        "label": "SharePoint list",
+        "target_label": "Site URL and list name",
+        "target_placeholder": "https://contoso.sharepoint.com/sites/Ops – Timesheets",
+        "secret_label": None,
+        "secret_placeholder": None,
+        "guide": [
+            "Enter the site URL and list name together, e.g. `https://contoso.sharepoint.com/sites/Ops – Timesheets`.",
+            "Full read/write access needs an **Azure AD app registration** with `Sites.ReadWrite.All` consented by an admin — SharePoint Online no longer accepts simpler auth.",
+            "**Live mode** only checks that the site URL responds over HTTPS; it can't validate the list or credentials without that app registration.",
+        ],
+    },
+    {
+        "key": "sqlDatabase",
+        "label": "SQL database",
+        "target_label": "Connection string",
+        "target_placeholder": "server, database, or connection string",
+        "secret_label": None,
+        "secret_placeholder": None,
+        "guide": [
+            "Paste a connection string containing a server/host (and optional port), e.g. `Server=tcp:myserver.database.windows.net,1433;Database=Timesheets;...`.",
+            "**Live mode** opens a plain TCP connection to that host and port to confirm the database server is reachable on the network.",
+            "It does not validate credentials or run a query — that needs the matching driver (e.g. ODBC Driver 18 for SQL Server) installed on the host running this app.",
+        ],
+    },
 ]
 PERIOD_OPTIONS = ["4 weeks", "8 weeks", "12 weeks", "All time"]
 PERIOD_KEYS = {"4 weeks": 4, "8 weeks": 8, "12 weeks": 12, "All time": None}
@@ -166,69 +206,142 @@ def day_meta(week_start: str, working_week: dict) -> list[dict]:
     return out
 
 
+def _empty_week(status: str = "draft") -> dict:
+    return {"rows": [], "status": status, "submitted_at": None, "approved_at": None, "note": ""}
+
+
+def _row(kind: str, ref_id: str, name: str, hours: dict) -> dict:
+    h = empty_hours()
+    h.update(hours)
+    return {"id": new_id("row"), "kind": kind, "ref_id": ref_id, "name": name, "hours": h}
+
+
+def _status_for_offset(i: int) -> str:
+    """A repeatable pattern of statuses across 12 weeks of synthetic history:
+    the current week is in-progress, one older week was simply missed, most
+    are submitted, and the oldest few have already been through manager
+    approval -- giving every period/scope filter combination something to show.
+    """
+    if i == 0:
+        return "draft"
+    if i == 2:
+        return "draft"  # a missed week: nothing logged, never submitted
+    if i >= 8:
+        return "approved"
+    return "submitted"
+
+
+def _split_hours(rng: random.Random, total: float, n: int) -> list[float]:
+    """Split `total` hours across `n` shares, rounded to the nearest half hour."""
+    if n <= 0:
+        return []
+    if n == 1:
+        return [round(total * 2) / 2]
+    weights = [rng.uniform(0.6, 1.4) for _ in range(n)]
+    w_sum = sum(weights)
+    return [round(total * w / w_sum * 2) / 2 for w in weights]
+
+
+def _gen_history_week(rng: random.Random, week_start: str, offset: int, projects: list[dict],
+                       categories: list[dict], working_week: dict) -> dict:
+    """A day-total-driven generator: each active day gets a realistic total
+    close to that day's working-week target, which is then split across the
+    week's projects (and an occasional leave/admin category) -- so combined
+    weekly hours stay in the right ballpark instead of stacking a near-full
+    day onto every project independently.
+    """
+    status = _status_for_offset(offset)
+    if status == "draft" and offset == 2:
+        return _empty_week("draft")
+
+    active_days = [k for k in DAY_KEYS if working_week[k]["active"]]
+    n_projects = 1 if len(projects) == 1 else rng.choice([1, 1, 2])
+    chosen_projects = rng.sample(projects, k=min(n_projects, len(projects)))
+    category = rng.choice(categories) if categories and rng.random() < 0.3 else None
+
+    project_hours = {p["id"]: empty_hours() for p in chosen_projects}
+    category_hours = empty_hours() if category else None
+
+    for k in active_days:
+        day_target = working_week[k]["hours"] if working_week[k]["active"] else 7.5
+        day_total = max(0.0, round((day_target + rng.uniform(-1.5, 1.0)) * 2) / 2)
+        cat_share = 0.0
+        if category is not None and rng.random() < 0.5:
+            cat_share = min(day_total, round(rng.uniform(0.5, 2.0) * 2) / 2)
+        for p, share in zip(chosen_projects, _split_hours(rng, max(0.0, day_total - cat_share), len(chosen_projects))):
+            project_hours[p["id"]][k] = share
+        if category is not None:
+            category_hours[k] = cat_share
+
+    rows = [_row("project", p["id"], p["name"], project_hours[p["id"]]) for p in chosen_projects]
+    if category is not None:
+        rows.append(_row("category", category["id"], category["name"], category_hours))
+
+    submitted_at = approved_at = None
+    if status in ("submitted", "approved"):
+        submitted_at = shift_date(week_start, 4) + f"T{16 + rng.randint(0, 2):02d}:{rng.randint(0, 59):02d}:00"
+    if status == "approved":
+        approved_at = shift_date(week_start, 5) + f"T{9 + rng.randint(0, 3):02d}:{rng.randint(0, 59):02d}:00"
+    return {"rows": rows, "status": status, "submitted_at": submitted_at, "approved_at": approved_at, "note": ""}
+
+
 def seed_state() -> dict:
-    """The demo data a brand-new install starts with, matching the design's seed."""
+    """The demo data a brand-new install starts with: 12 weeks (the current
+    in-progress week plus 11 weeks of synthetic history) for the signed-in
+    user and for every team member, so every Period/Scope filter combination
+    on the My History and My Team tabs has something real to show.
+    """
+    rng = random.Random(20260101)
     tm = today_monday()
-    prev = shift_date(tm, -7)
-
-    def week(rows, status, submitted_at=None):
-        return {"rows": rows, "status": status, "submitted_at": submitted_at, "note": ""}
-
-    def row(kind, ref_id, name, hours):
-        h = empty_hours()
-        h.update(hours)
-        return {"id": new_id("row"), "kind": kind, "ref_id": ref_id, "name": name, "hours": h}
+    working_week = default_working_week()
 
     weeks = {
-        prev: week(
-            [
-                row("project", "p1", "Website Redesign", {"mon": 5, "tue": 4, "wed": 4, "thu": 4, "fri": 4}),
-                row("project", "p2", "Client Onboarding Platform", {"mon": 3, "tue": 4, "wed": 4, "thu": 4, "fri": 4}),
+        tm: {
+            "rows": [
+                _row("project", "p1", "Website Redesign", {"mon": 4, "tue": 5, "wed": 3, "thu": 4, "fri": 2}),
+                _row("project", "p2", "Client Onboarding Platform", {"mon": 3, "tue": 2, "wed": 4, "thu": 3}),
+                _row("category", "c5", "Internal / Admin Time", {"mon": 1, "tue": 1, "wed": 1, "thu": 1, "fri": 1}),
             ],
-            "submitted", prev + "T17:32:00",
-        ),
-        tm: week(
-            [
-                row("project", "p1", "Website Redesign", {"mon": 4, "tue": 5, "wed": 3, "thu": 4, "fri": 2}),
-                row("project", "p2", "Client Onboarding Platform", {"mon": 3, "tue": 2, "wed": 4, "thu": 3}),
-                row("category", "c5", "Internal / Admin Time", {"mon": 1, "tue": 1, "wed": 1, "thu": 1, "fri": 1}),
-            ],
-            "draft",
-        ),
+            "status": "draft", "submitted_at": None, "approved_at": None, "note": "",
+        },
     }
+    for i in range(1, 12):
+        ws = shift_date(tm, -7 * i)
+        weeks[ws] = _gen_history_week(rng, ws, i, PROJECTS[:5], DEFAULT_CATEGORIES, working_week)
 
-    def member(name, project_id, project_name, prev_hours, this_hours, this_status, this_submitted):
-        return {
-            "id": new_id("member"),
-            "name": name,
-            "weeks": {
-                prev: week([row("project", project_id, project_name, prev_hours)], "submitted", prev + "T16:00:00"),
-                tm: week([row("project", project_id, project_name, this_hours)], this_status, this_submitted),
+    def member_seed(name: str, project_id: str, project_name: str, this_hours: dict, this_status: str,
+                     this_submitted: str | None) -> dict:
+        member_weeks = {
+            tm: {
+                "rows": [_row("project", project_id, project_name, this_hours)],
+                "status": this_status, "submitted_at": this_submitted, "approved_at": None, "note": "",
             },
         }
+        member_projects = [p for p in PROJECTS if p["id"] == project_id] or PROJECTS[:1]
+        for i in range(1, 12):
+            ws = shift_date(tm, -7 * i)
+            member_weeks[ws] = _gen_history_week(rng, ws, i, member_projects, DEFAULT_CATEGORIES, working_week)
+        return {"id": new_id("member"), "name": name, "weeks": member_weeks}
 
     team = [
-        member("Alice Chen", "p3", "Mobile App – iOS",
-               {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8},
-               {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8}, "submitted", tm + "T16:10:00"),
-        member("Ben Ortiz", "p4", "Data Migration",
-               {"mon": 7, "tue": 7, "wed": 7, "thu": 7, "fri": 7},
-               {"mon": 6, "tue": 6, "wed": 5, "thu": 5}, "draft", None),
-        member("Priya Nair", "p6", "Q3 Marketing Campaign",
-               {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8},
-               {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8}, "submitted", tm + "T09:05:00"),
-        member("Sam Whitfield", "p7", "Platform Reliability",
-               {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8},
-               {"mon": 8, "tue": 6, "wed": 8, "thu": 8, "fri": 6}, "draft", None),
+        member_seed("Alice Chen", "p3", "Mobile App – iOS",
+                    {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8}, "submitted", tm + "T16:10:00"),
+        member_seed("Ben Ortiz", "p4", "Data Migration",
+                    {"mon": 6, "tue": 6, "wed": 5, "thu": 5}, "draft", None),
+        member_seed("Priya Nair", "p6", "Q3 Marketing Campaign",
+                    {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8}, "submitted", tm + "T09:05:00"),
+        member_seed("Sam Whitfield", "p7", "Platform Reliability",
+                    {"mon": 8, "tue": 6, "wed": 8, "thu": 8, "fri": 6}, "draft", None),
     ]
 
     return {
-        "working_week": default_working_week(),
+        "working_week": working_week,
         "enabled_projects": {p["id"]: True for p in PROJECTS},
         "categories": copy.deepcopy(DEFAULT_CATEGORIES),
         "weeks": weeks,
         "team": team,
         "connections": {
+            "mode": "demo",
             "ado_org_url": "",
             "ado_project_name": "",
             "ado_connected": False,
@@ -238,18 +351,30 @@ def seed_state() -> dict:
     }
 
 
+def _migrate(data: dict) -> dict:
+    """Backfill keys added by later versions of the app onto older persisted data."""
+    for wk in data.get("weeks", {}).values():
+        wk.setdefault("approved_at", None)
+    for m in data.get("team", []):
+        for wk in m.get("weeks", {}).values():
+            wk.setdefault("approved_at", None)
+    data.setdefault("connections", {})
+    data["connections"].setdefault("mode", "demo")
+    return data
+
+
 def load_persisted() -> dict:
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r") as f:
-                return json.load(f)
+                return _migrate(json.load(f))
         except (json.JSONDecodeError, OSError):
             pass
     return seed_state()
 
 
 def persist(data: dict) -> None:
-    """Save everything except the (session-only) PAT, which we never write to disk."""
+    """Save everything except the (session-only) secrets, which we never write to disk."""
     try:
         with open(DATA_FILE, "w") as f:
             json.dump(data, f, indent=2)
@@ -259,12 +384,15 @@ def persist(data: dict) -> None:
 
 def get_week(data: dict, week_start: str) -> dict:
     if week_start not in data["weeks"]:
-        data["weeks"][week_start] = {"rows": [], "status": "draft", "submitted_at": None, "note": ""}
+        data["weeks"][week_start] = _empty_week()
     return data["weeks"][week_start]
 
 
 def get_member_week(member: dict, week_start: str) -> dict:
-    return member.get("weeks", {}).get(week_start, {"rows": [], "status": "draft", "submitted_at": None, "note": ""})
+    member.setdefault("weeks", {})
+    if week_start not in member["weeks"]:
+        member["weeks"][week_start] = _empty_week()
+    return member["weeks"][week_start]
 
 
 def week_total(week: dict) -> float:
@@ -312,3 +440,135 @@ def period_week_starts(period_label: str, data: dict, include_team: bool = False
         keys.add(tm)
         return sorted(keys)
     return [shift_date(tm, -7 * i) for i in range(n)]
+
+
+# ---------------------------------------------------------------------------
+# Approval workflow
+# ---------------------------------------------------------------------------
+def approve_week(week: dict) -> bool:
+    """Manager action: lock a submitted week so it can no longer be edited."""
+    if week["status"] != "submitted":
+        return False
+    week["status"] = "approved"
+    week["approved_at"] = datetime.now().isoformat(timespec="seconds")
+    return True
+
+
+def release_week(week: dict) -> bool:
+    """Manager action: undo an approval so the owner can edit the week again."""
+    if week["status"] != "approved":
+        return False
+    week["status"] = "draft"
+    week["approved_at"] = None
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Connections: Azure DevOps + storage provider live checks
+# ---------------------------------------------------------------------------
+def test_ado_connection(mode: str, org_url: str, project_name: str, pat: str) -> tuple[bool, str]:
+    org_url = (org_url or "").strip()
+    project_name = (project_name or "").strip()
+    pat = pat or ""
+    if not (org_url and project_name and pat.strip()):
+        return False, "Fill in organization URL, project, and personal access token first."
+    if mode != "live":
+        return True, "Connected to Azure DevOps (demo mode — no real API call made)."
+    return _test_ado_live(org_url, project_name, pat.strip())
+
+
+def _test_ado_live(org_url: str, project_name: str, pat: str) -> tuple[bool, str]:
+    import requests
+
+    api_url = f"{org_url.rstrip('/')}/_apis/projects/{project_name}?api-version=7.1"
+    try:
+        resp = requests.get(api_url, auth=("", pat), timeout=10)
+    except requests.RequestException as e:
+        return False, f"Couldn't reach Azure DevOps: {e}"
+    if resp.status_code == 200:
+        try:
+            proj = resp.json()
+        except ValueError:
+            proj = {}
+        return True, f"Connected — found project \"{proj.get('name', project_name)}\" ({proj.get('state', 'unknown')} state)."
+    if resp.status_code == 401:
+        return False, "Authentication failed — check the personal access token. It needs at least 'Project and Team (Read)' scope."
+    if resp.status_code == 404:
+        return False, f"Organization reachable, but project \"{project_name}\" wasn't found there."
+    return False, f"Azure DevOps returned HTTP {resp.status_code}."
+
+
+def test_storage_connection(mode: str, provider_key: str, target: str, secret: str) -> tuple[bool, str]:
+    target = target or ""
+    if not target.strip():
+        return False, "Fill in the connection details first."
+    if mode != "live":
+        return True, "Connection settings look good (demo mode — no real API call made)."
+    if provider_key == "azureTable":
+        return _test_azure_table_live(secret or "", target.strip())
+    if provider_key == "sharepoint":
+        return _test_sharepoint_live(target.strip())
+    if provider_key == "sqlDatabase":
+        return _test_sql_live(target.strip())
+    return False, "Unknown storage provider."
+
+
+def _test_azure_table_live(conn_str: str, table_name: str) -> tuple[bool, str]:
+    if not conn_str.strip():
+        return False, "Paste the storage account connection string first."
+    try:
+        from azure.data.tables import TableServiceClient
+
+        client = TableServiceClient.from_connection_string(conn_str)
+        tables = [t.name for t in client.list_tables()]
+    except Exception as e:  # noqa: BLE001 - surfacing the SDK's own error is the point
+        return False, f"Couldn't connect to Azure Table Storage: {e}"
+    if table_name and table_name not in tables:
+        return True, (
+            f"Connected to the storage account, but table \"{table_name}\" doesn't exist yet "
+            f"(found {len(tables)} other table(s)). It will be created on first write."
+        )
+    return True, f"Connected — {len(tables)} table(s) visible in this storage account."
+
+
+def _test_sharepoint_live(target: str) -> tuple[bool, str]:
+    import requests
+
+    site_url = target.split(" ")[0].strip()
+    if not site_url.startswith("http"):
+        return False, "Enter the SharePoint site URL first, e.g. https://contoso.sharepoint.com/sites/..."
+    try:
+        resp = requests.head(site_url, timeout=8, allow_redirects=True)
+    except requests.RequestException as e:
+        return False, f"Couldn't reach {site_url}: {e}"
+    if resp.status_code < 500:
+        return True, (
+            f"Site responded (HTTP {resp.status_code}). This only confirms the site is reachable — "
+            "full list access needs an Azure AD app registration (see the guide below)."
+        )
+    return False, f"Site responded with HTTP {resp.status_code}."
+
+
+def _test_sql_live(target: str) -> tuple[bool, str]:
+    m = re.search(r"(?:Server|Data Source|Host)\s*=\s*([^;]+)", target, re.IGNORECASE)
+    host_part = (m.group(1) if m else target).strip()
+    host_part = re.sub(r"^tcp:", "", host_part, flags=re.IGNORECASE)
+    if ":" in host_part:
+        host, _, port_s = host_part.partition(":")
+    elif "," in host_part:
+        host, _, port_s = host_part.partition(",")
+    else:
+        host, port_s = host_part, ""
+    host = host.strip()
+    port = int(port_s.strip()) if port_s.strip().isdigit() else 1433
+    if not host:
+        return False, "Enter a server/host in the connection string first."
+    try:
+        with socket.create_connection((host, port), timeout=6):
+            pass
+    except OSError as e:
+        return False, f"Couldn't reach {host}:{port} — {e}"
+    return True, (
+        f"{host}:{port} is reachable. This checks network connectivity only — it does not validate "
+        "credentials or run a query (see the guide below)."
+    )

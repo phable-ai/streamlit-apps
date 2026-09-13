@@ -4,14 +4,15 @@ Single-user app (no login) with a fake "team" roster so the My Team tab has
 something to show. Data is stored in a local JSON file next to this script,
 which is a reasonable stand-in for the design's browser localStorage — but
 note the caveat in README.md about Streamlit Community Cloud's storage being
-ephemeral across redeploys. The Manage Connections panel (Azure DevOps +
-storage provider) is a UI placeholder exactly as designed: it records what
-you type but doesn't call any real API.
+ephemeral across redeploys. The Manage Connections panel can run in Demo mode
+(a UI placeholder that simulates success) or Live mode (real API/reachability
+checks) — see lib.py's test_ado_connection/test_storage_connection.
 """
 
 import json
 
 import streamlit as st
+from st_keyup import st_keyup
 
 import lib
 
@@ -31,6 +32,7 @@ st.markdown(
       .stApp {{ background: {C['page_bg']}; }}
       .block-container {{ max-width: 1180px; }}
       .ts-mono {{ font-family: 'Space Mono', monospace; }}
+      .ts-nowrap {{ white-space: nowrap; }}
       .ts-pill {{ display:inline-flex; align-items:center; padding:5px 12px; border-radius:100px;
                   font-size:12.5px; font-weight:700; white-space:nowrap; }}
       .ts-card {{ background:{C['white']}; border:1px solid {C['border']}; border-radius:12px; padding:14px 16px; }}
@@ -78,25 +80,37 @@ _DEFAULTS = {
     "category_admin_open": False,
     "team_admin_open": False,
     "connections_open": False,
+    "settings_section": "My working week",
     "new_category_name": "",
     "new_member_name": "",
-    "project_admin_query": "",
-    "add_query": "",
+    "add_query_nonce": 0,
     "is_admin": True,
     "ado_pat": "",  # session-only: never written to disk
+    "storage_secret": "",  # session-only: never written to disk
+    "ado_test_result": None,
+    "storage_test_result": None,
 }
 for _k, _v in _DEFAULTS.items():
     st.session_state.setdefault(_k, _v)
 
 # Streamlit dialogs can also be dismissed via their own built-in close button,
-# clicking outside them, or Escape -- none of which run any of our code, so a
-# flag below can go stale at True after its dialog closes. Opening a new
-# dialog always routes through here so a stale flag can never combine with a
-# freshly-opened one and trip Streamlit's "only one dialog at a time" error.
+# clicking outside them, or Escape. `on_dismiss` (passed to each @st.dialog
+# below) runs one of these handlers in exactly that case, so the flag is reset
+# immediately instead of going stale at True -- which used to make the dialog
+# silently pop back open on the next unrelated rerun (e.g. switching tabs).
 _DIALOG_FLAGS = ["settings_open", "category_admin_open", "team_admin_open", "connections_open", "confirm_submit_open"]
 
 
+def _dismiss_handler(flag_name: str):
+    def _handler() -> None:
+        st.session_state[flag_name] = False
+    return _handler
+
+
 def open_dialog(flag_name: str) -> None:
+    """Belt-and-braces: force every other dialog flag off before opening one,
+    so a flag that somehow went stale can never combine with a freshly-opened
+    dialog and trip Streamlit's "only one dialog at a time" error."""
     for f in _DIALOG_FLAGS:
         st.session_state[f] = (f == flag_name)
 
@@ -116,7 +130,9 @@ def add_row(kind: str, ref_id: str, name: str) -> None:
     if any(r["ref_id"] == ref_id for r in week["rows"]):
         return
     week["rows"].append({"id": lib.new_id("row"), "kind": kind, "ref_id": ref_id, "name": name, "hours": lib.empty_hours()})
-    st.session_state.add_query = ""
+    # st_keyup ignores externally-assigned session_state; bumping the nonce
+    # remounts the search box under a fresh key, which is how it actually clears.
+    st.session_state.add_query_nonce += 1
     save()
 
 
@@ -129,7 +145,7 @@ def remove_row(row_id: str) -> None:
 def fill_row_evenly(row_id: str) -> None:
     week_start = st.session_state.current_week
     week = lib.get_week(data, week_start)
-    if week["status"] == "submitted":
+    if week["status"] != "draft":
         return
     row = next((r for r in week["rows"] if r["id"] == row_id), None)
     if not row:
@@ -150,7 +166,7 @@ def fill_row_evenly(row_id: str) -> None:
 def fill_remaining() -> None:
     week_start = st.session_state.current_week
     week = lib.get_week(data, week_start)
-    if week["status"] == "submitted" or not week["rows"]:
+    if week["status"] != "draft" or not week["rows"]:
         return
     days = lib.day_meta(week_start, data["working_week"])
     first = week["rows"][0]
@@ -202,6 +218,8 @@ def submit_week() -> None:
 
 def edit_week() -> None:
     week = lib.get_week(data, st.session_state.current_week)
+    if week["status"] != "submitted":
+        return
     week["status"] = "draft"
     save()
 
@@ -247,66 +265,85 @@ def open_history_week(week_start: str) -> None:
     st.session_state["_pending_tab"] = "My Time"
 
 
-def test_ado_connection() -> None:
-    conn = data["connections"]
-    if not (conn["ado_org_url"].strip() and conn["ado_project_name"].strip() and st.session_state.ado_pat.strip()):
-        st.toast("Fill in organization URL, project, and token first")
-        return
-    conn["ado_connected"] = True
-    save()
-    st.toast("Connected to Azure DevOps")
+def approve_member_week(week: dict) -> None:
+    if lib.approve_week(week):
+        save()
+        st.toast("Timesheet approved")
+
+
+def release_member_week(week: dict) -> None:
+    if lib.release_week(week):
+        save()
+        st.toast("Timesheet released — it can be edited again")
 
 
 # ---------------------------------------------------------------------------
 # Dialogs
 # ---------------------------------------------------------------------------
-@st.dialog("My working week")
+@st.dialog("Settings", width="large", on_dismiss=_dismiss_handler("settings_open"))
 def settings_dialog():
-    st.caption("Used to check each day adds up before you submit. Saved automatically.")
-    for i, k in enumerate(lib.DAY_KEYS):
-        wd = data["working_week"][k]
-        c1, c2, c3 = st.columns([0.4, 2, 1])
-        active_key = f"wwactive_{k}"
-        extra_a = {} if active_key in st.session_state else {"value": wd["active"]}
-        active = c1.checkbox(" ", key=active_key, label_visibility="collapsed", **extra_a)
-        wd["active"] = active
-        c2.markdown(lib.DAY_FULL[i])
-        hours_key = f"wwhours_{k}"
-        # apply_standard_hours() primes this key directly; see the cell input above for why
-        # `value=` is conditional.
-        extra_h = {} if hours_key in st.session_state else {"value": float(wd["hours"])}
-        hours = c3.number_input(
-            "hours", min_value=0.0, max_value=24.0, step=0.5,
-            key=hours_key, disabled=not active, label_visibility="collapsed", **extra_h,
+    nav_col, content_col = st.columns([1, 3], gap="medium")
+    with nav_col:
+        section = st.radio(
+            "Section", ["My working week", "My projects"],
+            key="settings_section", label_visibility="collapsed",
         )
-        wd["hours"] = hours
-    save()
+
+    with content_col:
+        if section == "My working week":
+            st.caption("Used to check each day adds up before you submit. Saved automatically.")
+            for i, k in enumerate(lib.DAY_KEYS):
+                wd = data["working_week"][k]
+                c1, c2, c3 = st.columns([0.4, 2, 1])
+                active_key = f"wwactive_{k}"
+                extra_a = {} if active_key in st.session_state else {"value": wd["active"]}
+                active = c1.checkbox(" ", key=active_key, label_visibility="collapsed", **extra_a)
+                wd["active"] = active
+                c2.markdown(lib.DAY_FULL[i])
+                hours_key = f"wwhours_{k}"
+                # apply_standard_hours() primes this key directly; see the cell input for why
+                # `value=` is conditional.
+                extra_h = {} if hours_key in st.session_state else {"value": float(wd["hours"])}
+                hours = c3.number_input(
+                    "hours", min_value=0.0, max_value=24.0, step=0.5,
+                    key=hours_key, disabled=not active, label_visibility="collapsed", **extra_h,
+                )
+                wd["hours"] = hours
+            save()
+            st.write("")
+            st.button("Set all active days to 7.5h", on_click=apply_standard_hours)
+        else:
+            enabled_count = sum(1 for p in lib.PROJECTS if data["enabled_projects"].get(p["id"], True))
+            st.markdown(
+                f"**My projects**  \n<span class='ts-muted'>Choose which projects appear in your Add project list &mdash; {enabled_count} enabled.</span>",
+                unsafe_allow_html=True,
+            )
+            query = st_keyup(
+                "Search projects", key="project_admin_query", placeholder="Search projects...",
+                label_visibility="collapsed", debounce=150,
+            )
+            q = query.strip().lower()
+            matching = [p for p in lib.PROJECTS if q in p["name"].lower()]
+            matching.sort(key=lambda p: not data["enabled_projects"].get(p["id"], True))
+            cap = 8
+            for p in matching[:cap]:
+                c1, c2 = st.columns([0.4, 2])
+                enabled = c1.checkbox(" ", value=data["enabled_projects"].get(p["id"], True), key=f"projtoggle_{p['id']}", label_visibility="collapsed")
+                data["enabled_projects"][p["id"]] = enabled
+                c2.markdown(p["name"])
+            if len(matching) > cap:
+                st.caption(f"+{len(matching) - cap} more — keep typing to find them.")
+            elif not matching:
+                st.caption("No matching projects.")
+            save()
 
     st.divider()
-    enabled_count = sum(1 for p in lib.PROJECTS if data["enabled_projects"].get(p["id"], True))
-    st.markdown(f"**My projects**  \n<span class='ts-muted'>Choose which projects appear in your Add project list &mdash; {enabled_count} enabled.</span>", unsafe_allow_html=True)
-    query = st.text_input("Search projects", key="project_admin_query", placeholder="Search projects...", label_visibility="collapsed")
-    q = query.strip().lower()
-    matching = [p for p in lib.PROJECTS if q in p["name"].lower()]
-    matching.sort(key=lambda p: not data["enabled_projects"].get(p["id"], True))
-    cap = 8
-    for p in matching[:cap]:
-        c1, c2 = st.columns([0.4, 2])
-        enabled = c1.checkbox(" ", value=data["enabled_projects"].get(p["id"], True), key=f"projtoggle_{p['id']}", label_visibility="collapsed")
-        data["enabled_projects"][p["id"]] = enabled
-        c2.markdown(p["name"])
-    if len(matching) > cap:
-        st.caption(f"+{len(matching) - cap} more — keep typing to find them.")
-    save()
-
-    c1, c2 = st.columns([2, 1])
-    c1.button("Set all active days to 7.5h", on_click=apply_standard_hours)
-    if c2.button("Done", type="primary", use_container_width=True):
+    if st.button("Done", type="primary", use_container_width=True):
         st.session_state.settings_open = False
         st.rerun()
 
 
-@st.dialog("Non-project time categories")
+@st.dialog("Non-project time categories", on_dismiss=_dismiss_handler("category_admin_open"))
 def category_dialog():
     st.caption("These appear alongside projects in everyone's Add picker.")
     for c in data["categories"]:
@@ -321,7 +358,7 @@ def category_dialog():
         st.rerun()
 
 
-@st.dialog("Team members")
+@st.dialog("Team members", on_dismiss=_dismiss_handler("team_admin_open"))
 def team_admin_dialog():
     st.caption("People who show up in your Team rollup.")
     for m in data["team"]:
@@ -336,10 +373,25 @@ def team_admin_dialog():
         st.rerun()
 
 
-@st.dialog("Manage connections")
+@st.dialog("Manage connections", width="large", on_dismiss=_dismiss_handler("connections_open"))
 def connections_dialog():
-    st.caption("Admin only. This panel is a design placeholder — it records what you enter but doesn't call a real API yet.")
     conn = data["connections"]
+    st.caption(
+        "Admin only. Demo mode simulates a successful connection. Live mode makes a real "
+        "network call to check credentials or reachability."
+    )
+
+    mode_label_for = {"demo": "Demo", "live": "Live"}
+    st.session_state.setdefault("connections_mode_control", mode_label_for[conn.get("mode", "demo")])
+    chosen_mode_label = st.segmented_control(
+        "Mode", ["Demo", "Live"], key="connections_mode_control", label_visibility="collapsed",
+    )
+    conn["mode"] = "live" if chosen_mode_label == "Live" else "demo"
+    if conn["mode"] == "live":
+        st.caption("Live mode is on — Test connection below will make a real call.")
+    save()
+
+    st.divider()
     st.markdown("<div class='ts-section-label'>Azure DevOps</div>", unsafe_allow_html=True)
     conn["ado_org_url"] = st.text_input("Organization URL", value=conn["ado_org_url"], placeholder="https://dev.azure.com/yourorg")
     conn["ado_project_name"] = st.text_input("Project name", value=conn["ado_project_name"], placeholder="e.g. Platform")
@@ -349,7 +401,24 @@ def connections_dialog():
         c1.markdown(pill("Connected", C["success_tint"], C["success_text"]), unsafe_allow_html=True)
     else:
         c1.markdown(pill("Not connected", C["danger_tint"], C["danger"]), unsafe_allow_html=True)
-    c2.button("Test connection", on_click=test_ado_connection)
+    if c2.button("Test connection", key="test_ado", use_container_width=True):
+        ok, msg = lib.test_ado_connection(
+            conn["mode"], conn["ado_org_url"], conn["ado_project_name"], st.session_state.ado_pat,
+        )
+        conn["ado_connected"] = ok
+        save()
+        st.session_state.ado_test_result = (ok, msg)
+    if st.session_state.ado_test_result:
+        ok, msg = st.session_state.ado_test_result
+        (st.success if ok else st.error)(msg)
+    with st.expander("How to set this up"):
+        for line in [
+            "**Organization URL** — `https://dev.azure.com/<your-org>`, found under Organization Settings or in your browser's address bar.",
+            "**Project name** — the exact project name (Project Settings → Overview, or the URL segment right after the org name).",
+            "**Personal access token** — top-right avatar → **Personal access tokens** → **New Token**. Grant at least **Project and Team (Read)**, set an expiry, and copy the token immediately — it's shown once.",
+            "The token above is kept only for this browser session and is never written to disk.",
+        ]:
+            st.markdown(f"- {line}")
 
     st.divider()
     st.markdown("<div class='ts-section-label'>Data storage</div>", unsafe_allow_html=True)
@@ -360,7 +429,25 @@ def connections_dialog():
     chosen_provider = next(p for p in lib.STORAGE_PROVIDERS if p["label"] == chosen)
     conn["storage_provider"] = chosen_provider["key"]
     conn["storage_target"] = st.text_input(chosen_provider["target_label"], value=conn["storage_target"], placeholder=chosen_provider["target_placeholder"])
+    if chosen_provider["secret_label"]:
+        st.text_input(chosen_provider["secret_label"], key="storage_secret", type="password", placeholder=chosen_provider["secret_placeholder"])
 
+    c1, c2 = st.columns([1, 1])
+    if c2.button("Test connection", key="test_storage", use_container_width=True):
+        ok, msg = lib.test_storage_connection(
+            conn["mode"], conn["storage_provider"], conn["storage_target"],
+            st.session_state.storage_secret,
+        )
+        save()
+        st.session_state.storage_test_result = (ok, msg)
+    if st.session_state.storage_test_result:
+        ok, msg = st.session_state.storage_test_result
+        (st.success if ok else st.error)(msg)
+    with st.expander("How to set this up"):
+        for line in chosen_provider["guide"]:
+            st.markdown(f"- {line}")
+
+    st.divider()
     c1, c2 = st.columns([1, 1])
     if c1.button("Cancel", use_container_width=True):
         st.session_state.connections_open = False
@@ -372,7 +459,7 @@ def connections_dialog():
         st.rerun()
 
 
-@st.dialog("Check before you submit")
+@st.dialog("Check before you submit", on_dismiss=_dismiss_handler("confirm_submit_open"))
 def confirm_submit_dialog(mismatch_lines, is_future_week, week_range):
     if is_future_week:
         st.info(f"This is a future week ({week_range}). You're submitting hours ahead of time.")
@@ -442,7 +529,7 @@ active_tab = active_tab or "My Time"
 current_week = st.session_state.current_week
 days = lib.day_meta(current_week, data["working_week"])
 week = lib.get_week(data, current_week)
-locked = week["status"] == "submitted"
+locked = week["status"] in ("submitted", "approved")
 is_future_week = current_week > lib.today_monday()
 
 # ---------------------------------------------------------------------------
@@ -497,7 +584,10 @@ if active_tab == "My Time":
     st.write("")
     b1, b2, b3, b4 = st.columns([1.3, 1.6, 1.6, 5])
     with b1.popover("+ Add project", disabled=locked):
-        query = st.text_input("Search", key="add_query", placeholder="Search projects...", label_visibility="collapsed")
+        query = st_keyup(
+            "Search", key=f"add_query_{st.session_state.add_query_nonce}",
+            placeholder="Search projects...", label_visibility="collapsed", debounce=150,
+        )
         q = query.strip().lower()
         existing_refs = {r["ref_id"] for r in week["rows"]}
         add_projects = [p for p in lib.PROJECTS if data["enabled_projects"].get(p["id"], True)
@@ -521,7 +611,7 @@ if active_tab == "My Time":
     if not week["rows"]:
         st.info("No projects added yet. Add one above to get started.")
     else:
-        widths = [2.1, 0.6] + [1] * 7 + [0.8, 0.4]
+        widths = [1.9, 0.9] + [1] * 7 + [1.0, 0.4]
         hdr = st.columns(widths)
         hdr[0].markdown("<div class='ts-section-label'>Project</div>", unsafe_allow_html=True)
         for i, d in enumerate(days):
@@ -537,7 +627,7 @@ if active_tab == "My Time":
             cols = st.columns(widths)
             cols[0].markdown(f"**{lib.esc(row['name'])}**")
             cols[1].button("Even", key=f"even_{row['id']}", on_click=fill_row_evenly, args=(row["id"],),
-                            disabled=locked, help="Apply first day's hours to all active days")
+                            disabled=locked, use_container_width=True, help="Apply first day's hours to all active days")
             for i, d in enumerate(days):
                 cell_key = f"cell_{row['id']}_{d['key']}"
                 # Omit `value=` once the key exists: fill_row_evenly/fill_remaining prime
@@ -549,7 +639,7 @@ if active_tab == "My Time":
                 )
                 row["hours"][d["key"]] = val
             total = lib.row_total(row)
-            cols[-2].markdown(f"<div class='ts-mono' style='text-align:right;font-weight:700;padding-top:8px;'>{lib.fmt_hours(total)}</div>", unsafe_allow_html=True)
+            cols[-2].markdown(f"<div class='ts-mono ts-nowrap' style='text-align:right;font-weight:700;padding-top:8px;'>{lib.fmt_hours(total)}</div>", unsafe_allow_html=True)
             cols[-1].button("✕", key=f"rm_{row['id']}", on_click=remove_row, args=(row["id"],), disabled=locked)
         save()
 
@@ -570,10 +660,10 @@ if active_tab == "My Time":
             else:
                 bg, fg, display = "transparent", C["text_muted"], "—"
             footer[2 + i].markdown(
-                f"<div class='ts-mono' style='text-align:center;padding:6px 2px;border-radius:6px;background:{bg};color:{fg};font-size:12.5px;font-weight:700;'>{display}</div>",
+                f"<div class='ts-mono ts-nowrap' style='text-align:center;padding:6px 2px;border-radius:6px;background:{bg};color:{fg};font-size:12.5px;font-weight:700;'>{display}</div>",
                 unsafe_allow_html=True,
             )
-        footer[-2].markdown(f"<div class='ts-mono' style='text-align:right;font-weight:800;'>{lib.fmt_hours(week_total)}/{lib.fmt_hours(week_target)}</div>", unsafe_allow_html=True)
+        footer[-2].markdown(f"<div class='ts-mono ts-nowrap' style='text-align:right;font-weight:800;'>{lib.fmt_hours(week_total)}/{lib.fmt_hours(week_target)}</div>", unsafe_allow_html=True)
 
     st.write("")
     week["note"] = st.text_area(
@@ -585,7 +675,9 @@ if active_tab == "My Time":
 
     st.write("")
     helper_col, btn_col = st.columns([3, 1])
-    if week["status"] == "submitted":
+    if week["status"] == "approved":
+        helper_text = f"Approved {lib.format_submitted_at(week['approved_at'])}. Locked until your manager releases it."
+    elif week["status"] == "submitted":
         helper_text = f"Submitted {lib.format_submitted_at(week['submitted_at'])}. Locked for editing."
     elif week_target == 0:
         helper_text = "Set your working week in Settings first."
@@ -608,10 +700,15 @@ if active_tab == "My Time":
             else:
                 open_dialog("confirm_submit_open")
                 st.rerun()
-    else:
+    elif week["status"] == "submitted":
         if btn_col.button("Edit", use_container_width=True):
             edit_week()
             st.rerun()
+    else:
+        btn_col.button(
+            "Locked", disabled=True, use_container_width=True,
+            help="Approved by your manager. Ask them to release it before you can edit.",
+        )
 
     if st.session_state.confirm_submit_open:
         lines = [{"label": d["label"], "detail": f"{lib.fmt_hours(d['total'])}h logged · {lib.fmt_hours(d['target'])}h usual"} for d in mismatch_days]
@@ -631,7 +728,7 @@ elif active_tab == "My History":
     weeks_iter = [data["weeks"][w] for w in week_starts if w in data["weeks"]]
     breakdown, total_hours = lib.build_breakdown(weeks_iter, scope)
     weeks_with_data = sum(1 for w in weeks_iter if w["rows"])
-    weeks_submitted = sum(1 for w in weeks_iter if w["status"] == "submitted")
+    weeks_submitted = sum(1 for w in weeks_iter if w["status"] in ("submitted", "approved"))
     avg_per_week = total_hours / weeks_with_data if weeks_with_data else 0
 
     m1, m2, m3 = st.columns(3)
@@ -667,7 +764,7 @@ elif active_tab == "My History":
             c1.markdown(f"**{lib.week_range_label(ws)}**" + (" · *current*" if ws == current_week else ""))
             c2.caption(wkx.get("note") or "")
             c3.markdown(pill(metax["label"], metax["bg"], metax["fg"]), unsafe_allow_html=True)
-            c4.markdown(f"<div class='ts-mono' style='text-align:right;'>{lib.fmt_hours(totalx)}/{lib.fmt_hours(targetx)}h</div>", unsafe_allow_html=True)
+            c4.markdown(f"<div class='ts-mono ts-nowrap' style='text-align:right;'>{lib.fmt_hours(totalx)}/{lib.fmt_hours(targetx)}h</div>", unsafe_allow_html=True)
             c5.button("Open", key=f"open_{ws}", on_click=open_history_week, args=(ws,), use_container_width=True)
 
 # ---------------------------------------------------------------------------
@@ -699,7 +796,7 @@ elif active_tab == "My Team":
         st.caption("Demo note: this build has no real login/multi-user auth, so every visitor sees the admin view.")
 
     week_target = lib.week_target(days)
-    submitted_count = sum(1 for m in data["team"] if lib.get_member_week(m, current_week)["status"] == "submitted")
+    submitted_count = sum(1 for m in data["team"] if lib.get_member_week(m, current_week)["status"] in ("submitted", "approved"))
     hours_logged = sum(lib.week_total(lib.get_member_week(m, current_week)) for m in data["team"])
     hours_target = week_target * len(data["team"])
 
@@ -714,8 +811,8 @@ elif active_tab == "My Team":
     roster = [{
         "id": "self", "name": "Morgan Lee (You)", "initials": "ML",
         "avatar_bg": C["accent_tint"], "avatar_fg": C["accent_tint_text"],
-        "status": self_meta, "total": self_total, "target": week_target,
-        "submitted_at": week["submitted_at"], "rows": week["rows"],
+        "status": self_meta, "status_key": week["status"], "total": self_total, "target": week_target,
+        "submitted_at": week["submitted_at"], "rows": week["rows"], "week_ref": week,
     }]
     for idx, m in enumerate(data["team"]):
         mwk = lib.get_member_week(m, current_week)
@@ -723,19 +820,30 @@ elif active_tab == "My Team":
         roster.append({
             "id": m["id"], "name": m["name"], "initials": lib.initials_of(m["name"]),
             "avatar_bg": tint, "avatar_fg": tint_text,
-            "status": lib.STATUS_META[mwk["status"]], "total": lib.week_total(mwk), "target": week_target,
-            "submitted_at": mwk["submitted_at"], "rows": mwk["rows"],
+            "status": lib.STATUS_META[mwk["status"]], "status_key": mwk["status"], "total": lib.week_total(mwk), "target": week_target,
+            "submitted_at": mwk["submitted_at"], "rows": mwk["rows"], "week_ref": mwk,
         })
 
     for member in roster:
         with st.container(border=True):
-            c1, c2, c3, c4, c5 = st.columns([0.5, 2, 1.2, 1.2, 1.6])
+            c1, c2, c3, c4, c5, c6 = st.columns([0.5, 1.7, 1.1, 1.1, 1.4, 1.2])
             c1.markdown(f"<div style='width:32px;height:32px;border-radius:50%;background:{member['avatar_bg']};color:{member['avatar_fg']};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12.5px;'>{member['initials']}</div>", unsafe_allow_html=True)
             c2.markdown(f"**{lib.esc(member['name'])}**")
             c3.markdown(pill(member["status"]["label"], member["status"]["bg"], member["status"]["fg"]), unsafe_allow_html=True)
-            c4.markdown(f"<div class='ts-mono' style='text-align:right;'>{lib.fmt_hours(member['total'])}/{lib.fmt_hours(member['target'])}h</div>", unsafe_allow_html=True)
+            c4.markdown(f"<div class='ts-mono ts-nowrap' style='text-align:right;'>{lib.fmt_hours(member['total'])}/{lib.fmt_hours(member['target'])}h</div>", unsafe_allow_html=True)
             submitted_label = lib.format_submitted_at(member["submitted_at"])
             c5.markdown(f"<div class='ts-muted' style='text-align:right;'>{submitted_label}</div>", unsafe_allow_html=True)
+            if st.session_state.is_admin:
+                if member["status_key"] == "submitted":
+                    c6.button(
+                        "Approve", key=f"approve_{member['id']}", type="primary", use_container_width=True,
+                        on_click=approve_member_week, args=(member["week_ref"],),
+                    )
+                elif member["status_key"] == "approved":
+                    c6.button(
+                        "Release", key=f"release_{member['id']}", use_container_width=True,
+                        on_click=release_member_week, args=(member["week_ref"],),
+                    )
             if member["rows"]:
                 with st.expander("Breakdown"):
                     for r in member["rows"]:
@@ -794,8 +902,8 @@ with st.sidebar:
             restored = json.loads(uploaded.getvalue())
             if not isinstance(restored, dict) or not {"weeks", "working_week", "team"} <= restored.keys():
                 raise ValueError("missing expected top-level keys")
-            st.session_state.data = restored
-            lib.persist(restored)
+            st.session_state.data = lib._migrate(restored)
+            lib.persist(st.session_state.data)
             st.success("Restored. Reloading…")
             st.rerun()
         except ValueError:

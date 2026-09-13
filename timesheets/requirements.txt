@@ -1,1 +1,4 @@
-streamlit>=1.38
+streamlit>=1.42
+streamlit-keyup>=1.0
+requests>=2.31
+azure-data-tables>=12.5
