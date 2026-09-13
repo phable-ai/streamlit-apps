@@ -127,6 +127,19 @@ STORAGE_PROVIDERS = [
             "It does not validate credentials or run a query — that needs the matching driver (e.g. ODBC Driver 18 for SQL Server) installed on the host running this app.",
         ],
     },
+    {
+        "key": "snowflake",
+        "label": "Snowflake",
+        "target_label": "Account identifier, warehouse, database, and schema",
+        "target_placeholder": "e.g. xy12345.us-east-1 / COMPUTE_WH / TIMESHEET_DB / PUBLIC",
+        "secret_label": "Username and password (or key-pair details)",
+        "secret_placeholder": "user=... password=... (kept only for this session)",
+        "guide": [
+            "Find your **account identifier** under Admin → Accounts in Snowsight, or from the URL you log in with (the part before `.snowflakecomputing.com`).",
+            "Create a dedicated **service user** with a strong password or key pair, and grant it only the warehouse/database/schema this app needs.",
+            "**Live mode** only checks that `https://<account>.snowflakecomputing.com` responds — it does not authenticate or run a query, which needs the `snowflake-connector-python` package (not bundled with this demo).",
+        ],
+    },
 ]
 PERIOD_OPTIONS = ["4 weeks", "8 weeks", "12 weeks", "All time"]
 PERIOD_KEYS = {"4 weeks": 4, "8 weeks": 8, "12 weeks": 12, "All time": None}
@@ -322,7 +335,7 @@ def seed_state() -> dict:
         weeks[ws] = _gen_history_week(rng, ws, i, PROJECTS[:5], DEFAULT_CATEGORIES, working_week)
 
     def member_seed(name: str, project_id: str, project_name: str, this_hours: dict, this_status: str,
-                     this_submitted: str | None) -> dict:
+                     this_submitted: str | None, is_admin: bool = False) -> dict:
         member_weeks = {
             tm: {
                 "rows": [_row("project", project_id, project_name, this_hours)],
@@ -333,11 +346,13 @@ def seed_state() -> dict:
         for i in range(1, 12):
             ws = shift_date(tm, -7 * i)
             member_weeks[ws] = _gen_history_week(rng, ws, i, member_projects, DEFAULT_CATEGORIES, working_week)
-        return {"id": new_id("member"), "name": name, "weeks": member_weeks}
+        return {"id": new_id("member"), "name": name, "weeks": member_weeks, "is_admin": is_admin}
 
     team = [
+        # Alice starts as an admin so the "viewing as" switcher has an interesting
+        # non-self admin to demonstrate out of the box.
         member_seed("Alice Chen", "p3", "Mobile App – iOS",
-                    {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8}, "submitted", tm + "T16:10:00"),
+                    {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8}, "submitted", tm + "T16:10:00", is_admin=True),
         member_seed("Ben Ortiz", "p4", "Data Migration",
                     {"mon": 6, "tue": 6, "wed": 5, "thu": 5}, "draft", None),
         member_seed("Priya Nair", "p6", "Q3 Marketing Campaign",
@@ -353,6 +368,7 @@ def seed_state() -> dict:
         "categories": copy.deepcopy(DEFAULT_CATEGORIES),
         "weeks": weeks,
         "team": team,
+        "self_is_admin": True,
         "connections": {
             "mode": "demo",
             "ado_org_url": "",
@@ -375,6 +391,8 @@ def _backfill_fields(data: dict) -> dict:
     for m in data.get("team", []):
         for wk in m.get("weeks", {}).values():
             wk.setdefault("approved_at", None)
+        m.setdefault("is_admin", False)
+    data.setdefault("self_is_admin", True)
     data.setdefault("connections", {})
     data["connections"].setdefault("mode", "demo")
     data["connections"].setdefault("ado_work_item_type", ADO_DEFAULT_WORK_ITEM_TYPE)
@@ -701,6 +719,8 @@ def test_storage_connection(mode: str, provider_key: str, target: str, secret: s
         return _test_sharepoint_live(target.strip())
     if provider_key == "sqlDatabase":
         return _test_sql_live(target.strip())
+    if provider_key == "snowflake":
+        return _test_snowflake_live(target.strip())
     return False, "Unknown storage provider."
 
 
@@ -763,3 +783,24 @@ def _test_sql_live(target: str) -> tuple[bool, str]:
         f"{host}:{port} is reachable. This checks network connectivity only — it does not validate "
         "credentials or run a query (see the guide below)."
     )
+
+
+def _test_snowflake_live(target: str) -> tuple[bool, str]:
+    import requests
+
+    account = target.split("/")[0].strip().split()[0] if target.split("/")[0].strip() else ""
+    if not account:
+        return False, "Enter your Snowflake account identifier first, e.g. xy12345.us-east-1."
+    account = account.removesuffix(".snowflakecomputing.com")
+    url = f"https://{account}.snowflakecomputing.com"
+    try:
+        resp = requests.head(url, timeout=8, allow_redirects=True)
+    except requests.RequestException as e:
+        return False, f"Couldn't reach {url}: {e}"
+    if resp.status_code < 500:
+        return True, (
+            f"{url} responded (HTTP {resp.status_code}). This only confirms the account endpoint is "
+            "reachable — authenticating and running a query needs the snowflake-connector-python package "
+            "(see the guide below)."
+        )
+    return False, f"{url} responded with HTTP {resp.status_code}."

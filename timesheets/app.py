@@ -81,7 +81,7 @@ _DEFAULTS = {
     "new_category_name": "",
     "new_member_name": "",
     "add_query_nonce": 0,
-    "is_admin": True,
+    "current_user_id": "self",  # who the "Viewing as" switcher says you are -- for demo/testing only
     "ado_pat": "",  # session-only: never written to disk
     "storage_secret": "",  # session-only: never written to disk
     "ado_test_result": None,
@@ -119,6 +119,28 @@ data = st.session_state.data
 
 def save() -> None:
     lib.persist(data)
+
+
+def current_person() -> dict:
+    """Who the "Viewing as" switcher in the top bar says you are right now --
+    a demo/testing stand-in for real per-user login, so admin-only UI (Approve/
+    Release, Settings' Team/Categories/Connections) can be checked both ways."""
+    uid = st.session_state.current_user_id
+    if uid == "self":
+        return {
+            "id": "self", "name": "Morgan Lee", "initials": "ML",
+            "avatar_bg": C["accent_tint"], "avatar_fg": C["accent_tint_text"],
+            "is_admin": data.get("self_is_admin", True),
+        }
+    for idx, m in enumerate(data["team"]):
+        if m["id"] == uid:
+            tint, tint_text = lib.AVATAR_TINTS[idx % len(lib.AVATAR_TINTS)]
+            return {
+                "id": m["id"], "name": m["name"], "initials": lib.initials_of(m["name"]),
+                "avatar_bg": tint, "avatar_fg": tint_text, "is_admin": m.get("is_admin", False),
+            }
+    st.session_state.current_user_id = "self"
+    return current_person()
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +272,7 @@ def add_team_member() -> None:
     name = st.session_state.new_member_name.strip()
     if not name:
         return
-    data["team"].append({"id": lib.new_id("member"), "name": name, "weeks": {}})
+    data["team"].append({"id": lib.new_id("member"), "name": name, "weeks": {}, "is_admin": False})
     st.session_state.new_member_name = ""
     save()
 
@@ -331,11 +353,30 @@ def _render_projects_section() -> None:
 
 
 def _render_team_section() -> None:
-    st.markdown("**Team**  \n<span class='ts-muted'>People who show up in your Team rollup.</span>", unsafe_allow_html=True)
+    st.markdown(
+        "**Team**  \n<span class='ts-muted'>People who show up in your Team rollup. "
+        "Admin controls who can approve timesheets and manage this Settings menu — "
+        "toggle it to test what a non-admin teammate sees.</span>",
+        unsafe_allow_html=True,
+    )
+    hc1, hc2, hc3 = st.columns([4, 1, 0.6])
+    hc2.markdown("<div class='ts-muted' style='text-align:center;'>Admin</div>", unsafe_allow_html=True)
+
+    c1, c2, _ = st.columns([4, 1, 0.6])
+    c1.markdown("<div class='ts-card' style='padding:8px 10px;'>Morgan Lee (You)</div>", unsafe_allow_html=True)
+    data["self_is_admin"] = c2.checkbox(
+        "Admin", value=data.get("self_is_admin", True), key="admin_self", label_visibility="collapsed",
+    )
+
     for m in data["team"]:
-        c1, c2 = st.columns([5, 1])
+        c1, c2, c3 = st.columns([4, 1, 0.6])
         c1.markdown(f"<div class='ts-card' style='padding:8px 10px;'>{lib.esc(m['name'])}</div>", unsafe_allow_html=True)
-        c2.button("", key=f"rmmem_{m['id']}", icon=":material/close:", help="Remove", on_click=remove_team_member, args=(m["id"],))
+        m["is_admin"] = c2.checkbox(
+            "Admin", value=m.get("is_admin", False), key=f"admin_{m['id']}", label_visibility="collapsed",
+        )
+        c3.button("", key=f"rmmem_{m['id']}", icon=":material/close:", help="Remove", on_click=remove_team_member, args=(m["id"],))
+    save()
+
     c1, c2 = st.columns([3, 1])
     c1.text_input("New member", key="new_member_name", placeholder="New team member name...", label_visibility="collapsed")
     c2.button("Add", on_click=add_team_member, disabled=not st.session_state.new_member_name.strip())
@@ -527,16 +568,26 @@ _SETTINGS_SECTIONS = {
     "Categories": _render_categories_section,
     "Connections": _render_connections_section,
 }
+_ADMIN_ONLY_SECTIONS = {"Team", "Categories", "Connections"}
 
 
 @st.dialog("Settings", width="large", on_dismiss=_dismiss_handler("settings_open"))
 def settings_dialog():
+    is_admin = current_person()["is_admin"]
+    section_names = [s for s in _SETTINGS_SECTIONS if is_admin or s not in _ADMIN_ONLY_SECTIONS]
+    if st.session_state.settings_section not in section_names:
+        # e.g. the viewer switched to a non-admin person, or demoted themselves,
+        # while a now-hidden admin-only section was still selected.
+        st.session_state.settings_section = section_names[0]
+
     nav_col, content_col = st.columns([1, 3], gap="medium")
     with nav_col:
         section = st.radio(
-            "Section", list(_SETTINGS_SECTIONS.keys()),
+            "Section", section_names,
             key="settings_section", label_visibility="collapsed",
         )
+        if not is_admin:
+            st.caption("Signed in as a non-admin — team, categories, and connections are hidden.")
 
     with content_col:
         _SETTINGS_SECTIONS[section]()
@@ -580,7 +631,7 @@ if "_pending_tab" in st.session_state:
 # ---------------------------------------------------------------------------
 # Top bar
 # ---------------------------------------------------------------------------
-top_l, top_m, top_r = st.columns([2, 3, 2])
+top_l, top_m, top_r = st.columns([2, 2.3, 3.7])
 with top_l:
     st.markdown(
         f"""<div style="display:flex;align-items:center;gap:12px;">
@@ -595,15 +646,40 @@ with top_m:
         key="active_tab", label_visibility="collapsed",
     )
 with top_r:
-    c1, c2 = st.columns([1, 4])
+    person = current_person()
+    c1, c2, c3, c4 = st.columns([0.55, 0.5, 2.1, 0.95])
     if c1.button("", icon=":material/settings:", help="Settings"):
         open_dialog("settings_open")
         st.rerun()
     c2.markdown(
-        f"""<div style="display:flex;align-items:center;gap:8px;height:100%;">
-        <div style="width:32px;height:32px;border-radius:50%;background:{C['accent_tint']};color:{C['accent_tint_text']};
-                    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12.5px;">ML</div>
-        <div style="font-size:13.5px;font-weight:600;">Morgan Lee</div></div>""",
+        f"""<div style="width:32px;height:32px;border-radius:50%;background:{person['avatar_bg']};color:{person['avatar_fg']};
+        display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12.5px;margin-top:2px;">{person['initials']}</div>""",
+        unsafe_allow_html=True,
+    )
+
+    # "Viewing as" is a demo/testing stand-in for real per-user login: it lets you
+    # compare what an admin vs. a non-admin teammate sees, without needing real auth.
+    viewer_names = {"self": "Morgan Lee (You)"}
+    for m in data["team"]:
+        viewer_names[m["id"]] = m["name"]
+    viewer_ids = list(viewer_names.keys())
+    viewer_labels = [viewer_names[i] for i in viewer_ids]
+    st.session_state.setdefault("viewer_select", viewer_names.get(st.session_state.current_user_id, viewer_labels[0]))
+    chosen_label = c3.selectbox(
+        "Viewing as", options=viewer_labels, key="viewer_select", label_visibility="collapsed",
+        help="Demo/testing: switch who you're viewing as to compare admin vs. non-admin access.",
+    )
+    chosen_id = viewer_ids[viewer_labels.index(chosen_label)]
+    if chosen_id != st.session_state.current_user_id:
+        st.session_state.current_user_id = chosen_id
+        st.rerun()
+
+    c4.markdown(
+        pill(
+            "Admin" if person["is_admin"] else "Member",
+            C["success_tint"] if person["is_admin"] else C["disabled_bg"],
+            C["success_text"] if person["is_admin"] else C["text_secondary"],
+        ),
         unsafe_allow_html=True,
     )
 
@@ -865,8 +941,9 @@ elif active_tab == "My Team":
         if nav4.button("Today", key="team_today"):
             st.session_state.current_week = lib.today_monday()
             st.rerun()
-    if st.session_state.is_admin:
-        st.caption("Manage team, categories, and connections from Settings (⚙ in the top bar). Demo note: this build has no real login/multi-user auth, so every visitor sees the admin view.")
+    viewer_is_admin = current_person()["is_admin"]
+    if viewer_is_admin:
+        st.caption("Manage team, categories, and connections from Settings (⚙ in the top bar). Demo note: this build has no real login, so \"Viewing as\" above simulates a different signed-in user for testing.")
 
     week_target = lib.week_target(days)
     submitted_count = sum(1 for m in data["team"] if lib.get_member_week(m, current_week)["status"] in ("submitted", "approved"))
@@ -908,7 +985,7 @@ elif active_tab == "My Team":
             c4.markdown(f"<div class='ts-mono ts-nowrap' style='text-align:right;'>{lib.fmt_hours(member['total'])}/{lib.fmt_hours(member['target'])}h</div>", unsafe_allow_html=True)
             submitted_label = lib.format_submitted_at(member["submitted_at"])
             c5.markdown(f"<div class='ts-muted' style='text-align:right;'>{submitted_label}</div>", unsafe_allow_html=True)
-            if st.session_state.is_admin:
+            if viewer_is_admin:
                 if member["status_key"] == "submitted":
                     c6.button(
                         "Approve", key=f"approve_{member['id']}", type="primary", use_container_width=True,
