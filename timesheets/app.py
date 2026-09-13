@@ -86,6 +86,8 @@ _DEFAULTS = {
     "storage_secret": "",  # session-only: never written to disk
     "ado_test_result": None,
     "ado_preview_result": None,
+    "ado_types_result": None,
+    "ado_states_result": None,
     "storage_test_result": None,
 }
 for _k, _v in _DEFAULTS.items():
@@ -372,6 +374,8 @@ def _render_connections_section() -> None:
         conn["ado_connected"] = False
         st.session_state.ado_test_result = None
         st.session_state.ado_preview_result = None
+        st.session_state.ado_types_result = None
+        st.session_state.ado_states_result = None
         st.session_state.storage_test_result = None
     conn["mode"] = new_mode
     if conn["mode"] == "live":
@@ -380,8 +384,14 @@ def _render_connections_section() -> None:
 
     st.divider()
     st.markdown("<div class='ts-section-label'>Azure DevOps</div>", unsafe_allow_html=True)
+    prev_org_url, prev_project_name = conn["ado_org_url"], conn["ado_project_name"]
     conn["ado_org_url"] = st.text_input("Organization URL", value=conn["ado_org_url"], placeholder="https://dev.azure.com/yourorg")
     conn["ado_project_name"] = st.text_input("Project name", value=conn["ado_project_name"], placeholder="e.g. Platform")
+    if (conn["ado_org_url"], conn["ado_project_name"]) != (prev_org_url, prev_project_name):
+        # Cached work item types/states belong to whatever project was connected
+        # when they were fetched -- pointing at a different org/project invalidates them.
+        st.session_state.ado_types_result = None
+        st.session_state.ado_states_result = None
     st.text_input("Personal access token", key="ado_pat", type="password", placeholder="Paste PAT (not saved between sessions)")
     c1, c2 = st.columns([1, 1])
     if conn["ado_connected"]:
@@ -408,18 +418,63 @@ def _render_connections_section() -> None:
             st.markdown(f"- {line}")
 
     st.markdown("<div class='ts-section-label' style='margin-top:14px;'>Which work items are &quot;projects&quot;</div>", unsafe_allow_html=True)
-    st.caption("Pick the Azure DevOps work item type that represents a timesheet project, and which of its states count as current.")
-    conn["ado_work_item_type"] = st.text_input(
-        "Work item type", value=conn.get("ado_work_item_type", lib.ADO_DEFAULT_WORK_ITEM_TYPE),
-        placeholder="e.g. Epic, Feature, User Story, Issue",
-        help="The exact Azure DevOps work item type name (case-sensitive). Common choices for a project-level container are Epic or Feature.",
-    )
-    conn["ado_states"] = st.multiselect(
-        "Included states", options=lib.ADO_STATE_PRESETS,
-        default=conn.get("ado_states", lib.ADO_DEFAULT_STATES),
-        accept_new_options=True,
-        help="Only work items in these states are treated as active projects. Type to add a state from your own process template if it isn't listed.",
-    )
+    st.caption("Loaded from the connected project itself, not a generic guess -- click Refresh (Live mode) after connecting.")
+
+    if st.button("Refresh from Azure DevOps", key="refresh_ado_meta", use_container_width=True):
+        ok_t, msg_t, types = lib.fetch_ado_work_item_types(
+            conn["mode"], conn["ado_org_url"], conn["ado_project_name"], st.session_state.ado_pat,
+        )
+        st.session_state.ado_types_result = (ok_t, msg_t, types)
+        if ok_t and types:
+            wit = conn.get("ado_work_item_type") if conn.get("ado_work_item_type") in types else types[0]
+            st.session_state.ado_states_result = lib.fetch_ado_states(
+                conn["mode"], conn["ado_org_url"], conn["ado_project_name"], st.session_state.ado_pat, wit,
+            )
+        else:
+            st.session_state.ado_states_result = None
+
+    types_result = st.session_state.ado_types_result
+    if types_result and types_result[0] and types_result[2]:
+        ok_t, msg_t, available_types = types_result
+        st.caption(msg_t)
+        current_type = conn.get("ado_work_item_type", lib.ADO_DEFAULT_WORK_ITEM_TYPE)
+        if current_type not in available_types:
+            current_type = available_types[0]
+        chosen_type = st.selectbox("Work item type", options=available_types, index=available_types.index(current_type))
+        if chosen_type != conn.get("ado_work_item_type"):
+            # Selecting a different type invalidates the states list -- it belongs to
+            # whichever type it was fetched for -- so refetch for the new one.
+            st.session_state.ado_states_result = lib.fetch_ado_states(
+                conn["mode"], conn["ado_org_url"], conn["ado_project_name"], st.session_state.ado_pat, chosen_type,
+            )
+        conn["ado_work_item_type"] = chosen_type
+    else:
+        if types_result and not types_result[0]:
+            st.error(types_result[1])
+        conn["ado_work_item_type"] = st.text_input(
+            "Work item type", value=conn.get("ado_work_item_type", lib.ADO_DEFAULT_WORK_ITEM_TYPE),
+            placeholder="e.g. Epic, Feature, User Story, Issue",
+            help="Click Refresh above (Live mode, connected) to pick from your real project's work item types instead of typing.",
+        )
+
+    states_result = st.session_state.ado_states_result
+    if states_result and states_result[0] and states_result[2]:
+        ok_s, msg_s, available_states = states_result
+        st.caption(msg_s)
+        default_states = [s for s in conn.get("ado_states", lib.ADO_DEFAULT_STATES) if s in available_states] or available_states[:1]
+        conn["ado_states"] = st.multiselect(
+            "Included states", options=available_states, default=default_states,
+            help="Only work items in these states are treated as active projects.",
+        )
+    else:
+        if states_result and not states_result[0]:
+            st.error(states_result[1])
+        conn["ado_states"] = st.multiselect(
+            "Included states", options=lib.ADO_STATE_PRESETS,
+            default=conn.get("ado_states", lib.ADO_DEFAULT_STATES),
+            accept_new_options=True,
+            help="Click Refresh above (Live mode, connected) to pick from your real project's states instead of this generic list.",
+        )
     save()
     if st.button("Preview matching work items", key="preview_ado_items", use_container_width=True):
         ok, msg, items = lib.fetch_ado_work_items(

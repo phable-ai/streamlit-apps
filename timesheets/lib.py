@@ -132,9 +132,10 @@ PERIOD_OPTIONS = ["4 weeks", "8 weeks", "12 weeks", "All time"]
 PERIOD_KEYS = {"4 weeks": 4, "8 weeks": 8, "12 weeks": 12, "All time": None}
 SCOPE_OPTIONS = ["All entries", "Projects only", "Non-project only"]
 
-# Common states across Azure DevOps' built-in process templates (Agile/Scrum/CMMI/Basic).
-# A given process/work item type may use others -- the picker also accepts free text.
+# Fallback lists used only in Demo mode or before a Live-mode fetch has run --
+# once connected, the actual picker options come from the connected project itself.
 ADO_STATE_PRESETS = ["New", "Active", "Resolved", "Closed", "Removed", "In Progress", "Done", "Proposed"]
+ADO_DEMO_WORK_ITEM_TYPES = ["Epic", "Feature", "User Story", "Task", "Bug", "Issue"]
 ADO_DEFAULT_WORK_ITEM_TYPE = "Epic"
 ADO_DEFAULT_STATES = ["New", "Active"]
 
@@ -509,7 +510,10 @@ def _test_ado_live(org_url: str, project_name: str, pat: str) -> tuple[bool, str
 
     api_url = f"{org_url.rstrip('/')}/_apis/projects/{project_name}?api-version=7.1"
     try:
-        resp = requests.get(api_url, auth=("", pat), timeout=10)
+        # A PAT-authenticated REST call should never need to follow a redirect -- one
+        # usually means the org doesn't exist and Azure DevOps is routing toward an
+        # interactive sign-in page instead of the API, which is a failure either way.
+        resp = requests.get(api_url, auth=("", pat), timeout=10, allow_redirects=False)
     except requests.RequestException as e:
         return False, f"Couldn't reach Azure DevOps: {e}"
     if resp.status_code == 200:
@@ -522,7 +526,92 @@ def _test_ado_live(org_url: str, project_name: str, pat: str) -> tuple[bool, str
         return False, "Authentication failed — check the personal access token. It needs at least 'Project and Team (Read)' scope."
     if resp.status_code == 404:
         return False, f"Organization reachable, but project \"{project_name}\" wasn't found there."
+    if 300 <= resp.status_code < 400:
+        return False, "Azure DevOps redirected the request instead of returning data — check the organization URL and project name."
     return False, f"Azure DevOps returned HTTP {resp.status_code}."
+
+
+def fetch_ado_work_item_types(mode: str, org_url: str, project_name: str, pat: str) -> tuple[bool, str, list[str]]:
+    """The work item TYPE picker should offer only types that actually exist in the
+    connected project, not a guessed generic list -- this is that real lookup."""
+    org_url = (org_url or "").strip()
+    project_name = (project_name or "").strip()
+    pat = pat or ""
+    if not (org_url and project_name and pat.strip()):
+        return False, "Fill in organization URL, project, and personal access token first.", []
+    if mode != "live":
+        return True, "Demo mode — showing common work item types, not your real project's.", list(ADO_DEMO_WORK_ITEM_TYPES)
+    return _fetch_ado_work_item_types_live(org_url, project_name, pat.strip())
+
+
+def _fetch_ado_work_item_types_live(org_url: str, project_name: str, pat: str) -> tuple[bool, str, list[str]]:
+    import requests
+
+    url = f"{org_url.rstrip('/')}/{project_name}/_apis/wit/workitemtypes?api-version=7.1"
+    try:
+        resp = requests.get(url, auth=("", pat), timeout=15, allow_redirects=False)
+    except requests.RequestException as e:
+        return False, f"Couldn't reach Azure DevOps: {e}", []
+    if resp.status_code == 401:
+        return False, "Authentication failed — check the personal access token. It needs at least 'Work Items (Read)' scope.", []
+    if resp.status_code == 404:
+        return False, "Organization/project not found (or the token can't see it).", []
+    if 300 <= resp.status_code < 400:
+        return False, "Azure DevOps redirected the request instead of returning data — check the organization URL and project name.", []
+    if resp.status_code != 200:
+        return False, f"Azure DevOps returned HTTP {resp.status_code}.", []
+    try:
+        values = resp.json().get("value", [])
+    except ValueError:
+        return False, "Azure DevOps returned an unexpected response.", []
+    names = sorted({v.get("name") for v in values if v.get("name") and not v.get("isDisabled", False)})
+    if not names:
+        return False, "No work item types found for that project.", []
+    return True, f"Found {len(names)} work item type(s) in this project.", names
+
+
+def fetch_ado_states(mode: str, org_url: str, project_name: str, pat: str,
+                      work_item_type: str) -> tuple[bool, str, list[str]]:
+    """The states picker should offer only states the connected project's process
+    template actually defines for this work item type, not a generic guess."""
+    org_url = (org_url or "").strip()
+    project_name = (project_name or "").strip()
+    pat = pat or ""
+    work_item_type = (work_item_type or "").strip()
+    if not (org_url and project_name and pat.strip() and work_item_type):
+        return False, "Fill in the organization, project, personal access token, and work item type first.", []
+    if mode != "live":
+        return True, "Demo mode — showing common states, not your real project's.", list(ADO_STATE_PRESETS)
+    return _fetch_ado_states_live(org_url, project_name, pat.strip(), work_item_type)
+
+
+def _fetch_ado_states_live(org_url: str, project_name: str, pat: str, work_item_type: str) -> tuple[bool, str, list[str]]:
+    import urllib.parse
+
+    import requests
+
+    encoded_type = urllib.parse.quote(work_item_type, safe="")
+    url = f"{org_url.rstrip('/')}/{project_name}/_apis/wit/workitemtypes/{encoded_type}/states?api-version=7.1"
+    try:
+        resp = requests.get(url, auth=("", pat), timeout=15, allow_redirects=False)
+    except requests.RequestException as e:
+        return False, f"Couldn't reach Azure DevOps: {e}", []
+    if resp.status_code == 401:
+        return False, "Authentication failed — check the personal access token.", []
+    if resp.status_code == 404:
+        return False, f"Work item type \"{work_item_type}\" wasn't found in this project.", []
+    if 300 <= resp.status_code < 400:
+        return False, "Azure DevOps redirected the request instead of returning data — check the organization URL and project name.", []
+    if resp.status_code != 200:
+        return False, f"Azure DevOps returned HTTP {resp.status_code}.", []
+    try:
+        values = resp.json().get("value", [])
+    except ValueError:
+        return False, "Azure DevOps returned an unexpected response.", []
+    names = [v.get("name") for v in values if v.get("name")]
+    if not names:
+        return False, f"No states found for work item type \"{work_item_type}\".", []
+    return True, f"Found {len(names)} state(s) for {work_item_type}.", names
 
 
 def fetch_ado_work_items(mode: str, org_url: str, project_name: str, pat: str,
@@ -561,13 +650,15 @@ def _fetch_ado_work_items_live(org_url: str, project_name: str, pat: str,
     )
     wiql_url = f"{org_url}/{project_name}/_apis/wit/wiql?api-version=7.1"
     try:
-        resp = requests.post(wiql_url, auth=("", pat), json={"query": query}, timeout=15)
+        resp = requests.post(wiql_url, auth=("", pat), json={"query": query}, timeout=15, allow_redirects=False)
     except requests.RequestException as e:
         return False, f"Couldn't reach Azure DevOps: {e}", []
     if resp.status_code == 401:
         return False, "Authentication failed — check the personal access token. It needs at least 'Work Items (Read)' scope.", []
     if resp.status_code == 404:
         return False, f"Organization/project not found (or the token can't see it).", []
+    if 300 <= resp.status_code < 400:
+        return False, "Azure DevOps redirected the request instead of returning data — check the organization URL and project name.", []
     if resp.status_code != 200:
         return False, f"Azure DevOps returned HTTP {resp.status_code} for the query.", []
     try:
@@ -580,7 +671,7 @@ def _fetch_ado_work_items_live(org_url: str, project_name: str, pat: str,
     ids = [str(w["id"]) for w in work_items[:200]]
     detail_url = f"{org_url}/_apis/wit/workitems?ids={','.join(ids)}&fields=System.Title,System.State&api-version=7.1"
     try:
-        detail_resp = requests.get(detail_url, auth=("", pat), timeout=15)
+        detail_resp = requests.get(detail_url, auth=("", pat), timeout=15, allow_redirects=False)
     except requests.RequestException as e:
         return True, f"Found {len(work_items)} matching work item(s), but couldn't fetch titles: {e}", []
     items = []
