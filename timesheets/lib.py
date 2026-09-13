@@ -21,6 +21,11 @@ from datetime import date, datetime, timedelta
 
 DATA_FILE = os.path.join(os.path.dirname(__file__), "timesheet_data.json")
 
+# Bump whenever seed_state()'s shape or content changes in a way that a locally
+# persisted install should pick up (e.g. more/different synthetic history) --
+# load_persisted() regenerates the whole seed when this doesn't match.
+SEED_VERSION = 2
+
 DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 DAY_ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 DAY_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -335,6 +340,7 @@ def seed_state() -> dict:
     ]
 
     return {
+        "seed_version": SEED_VERSION,
         "working_week": working_week,
         "enabled_projects": {p["id"]: True for p in PROJECTS},
         "categories": copy.deepcopy(DEFAULT_CATEGORIES),
@@ -351,8 +357,10 @@ def seed_state() -> dict:
     }
 
 
-def _migrate(data: dict) -> dict:
-    """Backfill keys added by later versions of the app onto older persisted data."""
+def _backfill_fields(data: dict) -> dict:
+    """Non-destructively add keys later versions of the app introduced, without
+    discarding anything -- used for restoring a user's own uploaded backup,
+    where silently replacing their data would be wrong even if it's old."""
     for wk in data.get("weeks", {}).values():
         wk.setdefault("approved_at", None)
     for m in data.get("team", []):
@@ -360,6 +368,7 @@ def _migrate(data: dict) -> dict:
             wk.setdefault("approved_at", None)
     data.setdefault("connections", {})
     data["connections"].setdefault("mode", "demo")
+    data.setdefault("seed_version", SEED_VERSION)
     return data
 
 
@@ -367,7 +376,15 @@ def load_persisted() -> dict:
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r") as f:
-                return _migrate(json.load(f))
+                data = json.load(f)
+            if data.get("seed_version") != SEED_VERSION:
+                # This local file is ephemeral demo data by design (see README) --
+                # an install persisted before the current synthetic-history
+                # generator existed would otherwise be stuck on its original
+                # stale seed forever, since this is the only place seed_state()
+                # normally gets called.
+                return seed_state()
+            return _backfill_fields(data)
         except (json.JSONDecodeError, OSError):
             pass
     return seed_state()

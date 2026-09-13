@@ -77,9 +77,6 @@ _DEFAULTS = {
     "active_tab": "My Time",
     "confirm_submit_open": False,
     "settings_open": False,
-    "category_admin_open": False,
-    "team_admin_open": False,
-    "connections_open": False,
     "settings_section": "My working week",
     "new_category_name": "",
     "new_member_name": "",
@@ -98,7 +95,7 @@ for _k, _v in _DEFAULTS.items():
 # below) runs one of these handlers in exactly that case, so the flag is reset
 # immediately instead of going stale at True -- which used to make the dialog
 # silently pop back open on the next unrelated rerun (e.g. switching tabs).
-_DIALOG_FLAGS = ["settings_open", "category_admin_open", "team_admin_open", "connections_open", "confirm_submit_open"]
+_DIALOG_FLAGS = ["settings_open", "confirm_submit_open"]
 
 
 def _dismiss_handler(flag_name: str):
@@ -280,113 +277,101 @@ def release_member_week(week: dict) -> None:
 # ---------------------------------------------------------------------------
 # Dialogs
 # ---------------------------------------------------------------------------
-@st.dialog("Settings", width="large", on_dismiss=_dismiss_handler("settings_open"))
-def settings_dialog():
-    nav_col, content_col = st.columns([1, 3], gap="medium")
-    with nav_col:
-        section = st.radio(
-            "Section", ["My working week", "My projects"],
-            key="settings_section", label_visibility="collapsed",
+def _render_working_week_section() -> None:
+    st.caption("Used to check each day adds up before you submit. Saved automatically.")
+    for i, k in enumerate(lib.DAY_KEYS):
+        wd = data["working_week"][k]
+        c1, c2, c3 = st.columns([0.4, 2, 1])
+        active_key = f"wwactive_{k}"
+        extra_a = {} if active_key in st.session_state else {"value": wd["active"]}
+        active = c1.checkbox(" ", key=active_key, label_visibility="collapsed", **extra_a)
+        wd["active"] = active
+        c2.markdown(lib.DAY_FULL[i])
+        hours_key = f"wwhours_{k}"
+        # apply_standard_hours() primes this key directly; see the cell input for why
+        # `value=` is conditional.
+        extra_h = {} if hours_key in st.session_state else {"value": float(wd["hours"])}
+        hours = c3.number_input(
+            "hours", min_value=0.0, max_value=24.0, step=0.5,
+            key=hours_key, disabled=not active, label_visibility="collapsed", **extra_h,
         )
-
-    with content_col:
-        if section == "My working week":
-            st.caption("Used to check each day adds up before you submit. Saved automatically.")
-            for i, k in enumerate(lib.DAY_KEYS):
-                wd = data["working_week"][k]
-                c1, c2, c3 = st.columns([0.4, 2, 1])
-                active_key = f"wwactive_{k}"
-                extra_a = {} if active_key in st.session_state else {"value": wd["active"]}
-                active = c1.checkbox(" ", key=active_key, label_visibility="collapsed", **extra_a)
-                wd["active"] = active
-                c2.markdown(lib.DAY_FULL[i])
-                hours_key = f"wwhours_{k}"
-                # apply_standard_hours() primes this key directly; see the cell input for why
-                # `value=` is conditional.
-                extra_h = {} if hours_key in st.session_state else {"value": float(wd["hours"])}
-                hours = c3.number_input(
-                    "hours", min_value=0.0, max_value=24.0, step=0.5,
-                    key=hours_key, disabled=not active, label_visibility="collapsed", **extra_h,
-                )
-                wd["hours"] = hours
-            save()
-            st.write("")
-            st.button("Set all active days to 7.5h", on_click=apply_standard_hours)
-        else:
-            enabled_count = sum(1 for p in lib.PROJECTS if data["enabled_projects"].get(p["id"], True))
-            st.markdown(
-                f"**My projects**  \n<span class='ts-muted'>Choose which projects appear in your Add project list &mdash; {enabled_count} enabled.</span>",
-                unsafe_allow_html=True,
-            )
-            query = st_keyup(
-                "Search projects", key="project_admin_query", placeholder="Search projects...",
-                label_visibility="collapsed", debounce=150,
-            )
-            q = query.strip().lower()
-            matching = [p for p in lib.PROJECTS if q in p["name"].lower()]
-            matching.sort(key=lambda p: not data["enabled_projects"].get(p["id"], True))
-            cap = 8
-            for p in matching[:cap]:
-                c1, c2 = st.columns([0.4, 2])
-                enabled = c1.checkbox(" ", value=data["enabled_projects"].get(p["id"], True), key=f"projtoggle_{p['id']}", label_visibility="collapsed")
-                data["enabled_projects"][p["id"]] = enabled
-                c2.markdown(p["name"])
-            if len(matching) > cap:
-                st.caption(f"+{len(matching) - cap} more — keep typing to find them.")
-            elif not matching:
-                st.caption("No matching projects.")
-            save()
-
-    st.divider()
-    if st.button("Done", type="primary", use_container_width=True):
-        st.session_state.settings_open = False
-        st.rerun()
+        wd["hours"] = hours
+    save()
+    st.write("")
+    st.button("Set all active days to 7.5h", on_click=apply_standard_hours)
 
 
-@st.dialog("Non-project time categories", on_dismiss=_dismiss_handler("category_admin_open"))
-def category_dialog():
-    st.caption("These appear alongside projects in everyone's Add picker.")
-    for c in data["categories"]:
-        c1, c2 = st.columns([5, 1])
-        c1.markdown(f"<div class='ts-card' style='padding:8px 10px;'>{lib.esc(c['name'])}</div>", unsafe_allow_html=True)
-        c2.button("✕", key=f"rmcat_{c['id']}", on_click=remove_category, args=(c["id"],))
-    c1, c2 = st.columns([3, 1])
-    c1.text_input("New category", key="new_category_name", placeholder="New category name...", label_visibility="collapsed")
-    c2.button("Add", on_click=add_category, disabled=not st.session_state.new_category_name.strip())
-    if st.button("Done", type="primary"):
-        st.session_state.category_admin_open = False
-        st.rerun()
+def _render_projects_section() -> None:
+    enabled_count = sum(1 for p in lib.PROJECTS if data["enabled_projects"].get(p["id"], True))
+    st.markdown(
+        f"**My projects**  \n<span class='ts-muted'>Choose which projects appear in your Add project list &mdash; {enabled_count} enabled.</span>",
+        unsafe_allow_html=True,
+    )
+    query = st_keyup(
+        "Search projects", key="project_admin_query", placeholder="Search projects...",
+        label_visibility="collapsed", debounce=150,
+    )
+    q = query.strip().lower()
+    matching = [p for p in lib.PROJECTS if q in p["name"].lower()]
+    matching.sort(key=lambda p: not data["enabled_projects"].get(p["id"], True))
+    cap = 8
+    for p in matching[:cap]:
+        c1, c2 = st.columns([0.4, 2])
+        enabled = c1.checkbox(" ", value=data["enabled_projects"].get(p["id"], True), key=f"projtoggle_{p['id']}", label_visibility="collapsed")
+        data["enabled_projects"][p["id"]] = enabled
+        c2.markdown(p["name"])
+    if len(matching) > cap:
+        st.caption(f"+{len(matching) - cap} more — keep typing to find them.")
+    elif not matching:
+        st.caption("No matching projects.")
+    save()
 
 
-@st.dialog("Team members", on_dismiss=_dismiss_handler("team_admin_open"))
-def team_admin_dialog():
-    st.caption("People who show up in your Team rollup.")
+def _render_team_section() -> None:
+    st.markdown("**Team**  \n<span class='ts-muted'>People who show up in your Team rollup.</span>", unsafe_allow_html=True)
     for m in data["team"]:
         c1, c2 = st.columns([5, 1])
         c1.markdown(f"<div class='ts-card' style='padding:8px 10px;'>{lib.esc(m['name'])}</div>", unsafe_allow_html=True)
-        c2.button("✕", key=f"rmmem_{m['id']}", on_click=remove_team_member, args=(m["id"],))
+        c2.button("", key=f"rmmem_{m['id']}", icon=":material/close:", help="Remove", on_click=remove_team_member, args=(m["id"],))
     c1, c2 = st.columns([3, 1])
     c1.text_input("New member", key="new_member_name", placeholder="New team member name...", label_visibility="collapsed")
     c2.button("Add", on_click=add_team_member, disabled=not st.session_state.new_member_name.strip())
-    if st.button("Done", type="primary"):
-        st.session_state.team_admin_open = False
-        st.rerun()
 
 
-@st.dialog("Manage connections", width="large", on_dismiss=_dismiss_handler("connections_open"))
-def connections_dialog():
+def _render_categories_section() -> None:
+    st.markdown("**Categories**  \n<span class='ts-muted'>These appear alongside projects in everyone's Add picker.</span>", unsafe_allow_html=True)
+    for c in data["categories"]:
+        c1, c2 = st.columns([5, 1])
+        c1.markdown(f"<div class='ts-card' style='padding:8px 10px;'>{lib.esc(c['name'])}</div>", unsafe_allow_html=True)
+        c2.button("", key=f"rmcat_{c['id']}", icon=":material/close:", help="Remove", on_click=remove_category, args=(c["id"],))
+    c1, c2 = st.columns([3, 1])
+    c1.text_input("New category", key="new_category_name", placeholder="New category name...", label_visibility="collapsed")
+    c2.button("Add", on_click=add_category, disabled=not st.session_state.new_category_name.strip())
+
+
+def _render_connections_section() -> None:
     conn = data["connections"]
+    st.markdown("**Connections**", unsafe_allow_html=True)
     st.caption(
         "Admin only. Demo mode simulates a successful connection. Live mode makes a real "
         "network call to check credentials or reachability."
     )
 
     mode_label_for = {"demo": "Demo", "live": "Live"}
-    st.session_state.setdefault("connections_mode_control", mode_label_for[conn.get("mode", "demo")])
+    prev_mode = conn.get("mode", "demo")
+    st.session_state.setdefault("connections_mode_control", mode_label_for[prev_mode])
     chosen_mode_label = st.segmented_control(
         "Mode", ["Demo", "Live"], key="connections_mode_control", label_visibility="collapsed",
     )
-    conn["mode"] = "live" if chosen_mode_label == "Live" else "demo"
+    new_mode = "live" if chosen_mode_label == "Live" else "demo"
+    if new_mode != prev_mode:
+        # A "Connected" pill or test result from the OTHER mode is meaningless here --
+        # Demo always trivially "succeeds", so leaving it showing after switching to
+        # Live would look like a real Live-mode result it never was.
+        conn["ado_connected"] = False
+        st.session_state.ado_test_result = None
+        st.session_state.storage_test_result = None
+    conn["mode"] = new_mode
     if conn["mode"] == "live":
         st.caption("Live mode is on — Test connection below will make a real call.")
     save()
@@ -446,16 +431,33 @@ def connections_dialog():
     with st.expander("How to set this up"):
         for line in chosen_provider["guide"]:
             st.markdown(f"- {line}")
+    save()
+
+
+_SETTINGS_SECTIONS = {
+    "My working week": _render_working_week_section,
+    "My projects": _render_projects_section,
+    "Team": _render_team_section,
+    "Categories": _render_categories_section,
+    "Connections": _render_connections_section,
+}
+
+
+@st.dialog("Settings", width="large", on_dismiss=_dismiss_handler("settings_open"))
+def settings_dialog():
+    nav_col, content_col = st.columns([1, 3], gap="medium")
+    with nav_col:
+        section = st.radio(
+            "Section", list(_SETTINGS_SECTIONS.keys()),
+            key="settings_section", label_visibility="collapsed",
+        )
+
+    with content_col:
+        _SETTINGS_SECTIONS[section]()
 
     st.divider()
-    c1, c2 = st.columns([1, 1])
-    if c1.button("Cancel", use_container_width=True):
-        st.session_state.connections_open = False
-        st.rerun()
-    if c2.button("Save", type="primary", use_container_width=True):
-        save()
-        st.toast("Connection settings saved")
-        st.session_state.connections_open = False
+    if st.button("Done", type="primary", use_container_width=True):
+        st.session_state.settings_open = False
         st.rerun()
 
 
@@ -481,12 +483,6 @@ def confirm_submit_dialog(mismatch_lines, is_future_week, week_range):
 
 if st.session_state.settings_open:
     settings_dialog()
-if st.session_state.category_admin_open:
-    category_dialog()
-if st.session_state.team_admin_open:
-    team_admin_dialog()
-if st.session_state.connections_open:
-    connections_dialog()
 
 # A widget's session_state key can't be reassigned after that widget has
 # already been drawn this run, so a request to switch tabs (e.g. from the
@@ -514,7 +510,7 @@ with top_m:
     )
 with top_r:
     c1, c2 = st.columns([1, 4])
-    if c1.button("⚙", help="My working week"):
+    if c1.button("", icon=":material/settings:", help="Settings"):
         open_dialog("settings_open")
         st.rerun()
     c2.markdown(
@@ -537,11 +533,11 @@ is_future_week = current_week > lib.today_monday()
 # ---------------------------------------------------------------------------
 if active_tab == "My Time":
     nav1, nav2, nav3, nav4, nav5 = st.columns([0.5, 2, 0.5, 0.7, 3])
-    if nav1.button("‹"):
+    if nav1.button("", icon=":material/chevron_left:", help="Previous week"):
         st.session_state.current_week = lib.shift_date(current_week, -7)
         st.rerun()
     nav2.markdown(f"<div style='text-align:center;font-weight:700;font-size:15px;padding-top:6px;'>{lib.week_range_label(current_week)}</div>", unsafe_allow_html=True)
-    if nav3.button("›"):
+    if nav3.button("", icon=":material/chevron_right:", help="Next week"):
         st.session_state.current_week = lib.shift_date(current_week, 7)
         st.rerun()
     if current_week != lib.today_monday():
@@ -640,7 +636,7 @@ if active_tab == "My Time":
                 row["hours"][d["key"]] = val
             total = lib.row_total(row)
             cols[-2].markdown(f"<div class='ts-mono ts-nowrap' style='text-align:right;font-weight:700;padding-top:8px;'>{lib.fmt_hours(total)}</div>", unsafe_allow_html=True)
-            cols[-1].button("✕", key=f"rm_{row['id']}", on_click=remove_row, args=(row["id"],), disabled=locked)
+            cols[-1].button("", key=f"rm_{row['id']}", icon=":material/close:", help="Remove", on_click=remove_row, args=(row["id"],), disabled=locked)
         save()
 
         footer = st.columns(widths)
@@ -771,39 +767,32 @@ elif active_tab == "My History":
 # My Team
 # ---------------------------------------------------------------------------
 elif active_tab == "My Team":
-    nav1, nav2, nav3, nav4, nav5, nav6 = st.columns([0.5, 2, 0.5, 0.7, 1.3, 1.5])
-    if nav1.button("‹", key="team_prev"):
+    nav1, nav2, nav3, nav4 = st.columns([0.5, 2, 0.5, 0.7])
+    if nav1.button("", icon=":material/chevron_left:", help="Previous week", key="team_prev"):
         st.session_state.current_week = lib.shift_date(current_week, -7)
         st.rerun()
     nav2.markdown(f"<div style='text-align:center;font-weight:700;font-size:15px;padding-top:6px;'>{lib.week_range_label(current_week)}</div>", unsafe_allow_html=True)
-    if nav3.button("›", key="team_next"):
+    if nav3.button("", icon=":material/chevron_right:", help="Next week", key="team_next"):
         st.session_state.current_week = lib.shift_date(current_week, 7)
         st.rerun()
     if current_week != lib.today_monday():
         if nav4.button("Today", key="team_today"):
             st.session_state.current_week = lib.today_monday()
             st.rerun()
-    if nav5.button("Manage team", use_container_width=True):
-        open_dialog("team_admin_open")
-        st.rerun()
-    if nav6.button("Manage categories", use_container_width=True):
-        open_dialog("category_admin_open")
-        st.rerun()
     if st.session_state.is_admin:
-        if st.button("Manage connections"):
-            open_dialog("connections_open")
-            st.rerun()
-        st.caption("Demo note: this build has no real login/multi-user auth, so every visitor sees the admin view.")
+        st.caption("Manage team, categories, and connections from Settings (⚙ in the top bar). Demo note: this build has no real login/multi-user auth, so every visitor sees the admin view.")
 
     week_target = lib.week_target(days)
     submitted_count = sum(1 for m in data["team"] if lib.get_member_week(m, current_week)["status"] in ("submitted", "approved"))
+    approved_count = sum(1 for m in data["team"] if lib.get_member_week(m, current_week)["status"] == "approved")
     hours_logged = sum(lib.week_total(lib.get_member_week(m, current_week)) for m in data["team"])
     hours_target = week_target * len(data["team"])
 
     st.write("")
-    s1, s2 = st.columns(2)
+    s1, s2, s3 = st.columns(3)
     s1.markdown(f"<div class='ts-card'><div class='ts-mono' style='font-size:22px;font-weight:800;'>{submitted_count}/{len(data['team'])}</div><div class='ts-muted'>Submitted</div></div>", unsafe_allow_html=True)
-    s2.markdown(f"<div class='ts-card'><div class='ts-mono' style='font-size:22px;font-weight:800;'>{lib.fmt_hours(hours_logged)}/{lib.fmt_hours(hours_target)}</div><div class='ts-muted'>Hours logged</div></div>", unsafe_allow_html=True)
+    s2.markdown(f"<div class='ts-card'><div class='ts-mono' style='font-size:22px;font-weight:800;'>{approved_count}/{len(data['team'])}</div><div class='ts-muted'>Approved</div></div>", unsafe_allow_html=True)
+    s3.markdown(f"<div class='ts-card'><div class='ts-mono' style='font-size:22px;font-weight:800;'>{lib.fmt_hours(hours_logged)}/{lib.fmt_hours(hours_target)}</div><div class='ts-muted'>Hours logged</div></div>", unsafe_allow_html=True)
 
     st.write("")
     self_total = lib.week_total(week)
@@ -902,7 +891,7 @@ with st.sidebar:
             restored = json.loads(uploaded.getvalue())
             if not isinstance(restored, dict) or not {"weeks", "working_week", "team"} <= restored.keys():
                 raise ValueError("missing expected top-level keys")
-            st.session_state.data = lib._migrate(restored)
+            st.session_state.data = lib._backfill_fields(restored)
             lib.persist(st.session_state.data)
             st.success("Restored. Reloading…")
             st.rerun()
