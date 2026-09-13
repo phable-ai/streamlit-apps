@@ -43,6 +43,26 @@ st.markdown(
                             text-transform:uppercase; letter-spacing:0.04em; }}
       div[data-testid="stVerticalBlockBorderWrapper"] {{ border-radius: 12px; }}
       button[kind="secondary"] {{ border-color: {C['border']} !important; }}
+      /* `st.columns(..., wrap=False)` keeps a row from stacking on narrow screens,
+         but Streamlit still floors every column at 128px so it can scroll instead
+         of squeezing -- way oversized for compact toolbar rows of a button/avatar/
+         badge, which just need to shrink to their own content instead. The hours
+         grid is the one place a scrollable, fixed-ish column width is actually
+         wanted, so it keeps a smaller (not zero) floor to stay tap-friendly. */
+      div[data-testid="stHorizontalBlock"][data-test-wrap="false"] > div[data-testid="stColumn"] {{
+        min-width: 0 !important;
+      }}
+      .st-key-hours_grid div[data-testid="stHorizontalBlock"][data-test-wrap="false"] > div[data-testid="stColumn"] {{
+        min-width: 54px !important;
+      }}
+      /* These rows mix short widgets with real text/pills that mustn't shrink
+         below their own content (unlike the icon-sized toolbar clusters above) --
+         a smaller-than-default floor avoids both the wasted 128px-per-column
+         scroll AND text/pills overlapping their neighbors. */
+      [class*="st-key-history_row_"] div[data-testid="stHorizontalBlock"][data-test-wrap="false"] > div[data-testid="stColumn"],
+      [class*="st-key-team_roster_row_"] div[data-testid="stHorizontalBlock"][data-test-wrap="false"] > div[data-testid="stColumn"] {{
+        min-width: 92px !important;
+      }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -306,7 +326,7 @@ def _render_working_week_section() -> None:
     st.caption("Used to check each day adds up before you submit. Saved automatically.")
     for i, k in enumerate(lib.DAY_KEYS):
         wd = data["working_week"][k]
-        c1, c2, c3 = st.columns([0.4, 2, 1])
+        c1, c2, c3 = st.columns([0.4, 2, 1], wrap=False)
         active_key = f"wwactive_{k}"
         extra_a = {} if active_key in st.session_state else {"value": wd["active"]}
         active = c1.checkbox(" ", key=active_key, label_visibility="collapsed", **extra_a)
@@ -341,7 +361,7 @@ def _render_projects_section() -> None:
     matching.sort(key=lambda p: not data["enabled_projects"].get(p["id"], True))
     cap = 8
     for p in matching[:cap]:
-        c1, c2 = st.columns([0.4, 2])
+        c1, c2 = st.columns([0.4, 2], wrap=False)
         enabled = c1.checkbox(" ", value=data["enabled_projects"].get(p["id"], True), key=f"projtoggle_{p['id']}", label_visibility="collapsed")
         data["enabled_projects"][p["id"]] = enabled
         c2.markdown(p["name"])
@@ -359,17 +379,17 @@ def _render_team_section() -> None:
         "toggle it to test what a non-admin teammate sees.</span>",
         unsafe_allow_html=True,
     )
-    hc1, hc2, hc3 = st.columns([4, 1, 0.6])
+    hc1, hc2, hc3 = st.columns([4, 1, 0.6], wrap=False)
     hc2.markdown("<div class='ts-muted' style='text-align:center;'>Admin</div>", unsafe_allow_html=True)
 
-    c1, c2, _ = st.columns([4, 1, 0.6])
+    c1, c2, _ = st.columns([4, 1, 0.6], wrap=False)
     c1.markdown("<div class='ts-card' style='padding:8px 10px;'>Morgan Lee (You)</div>", unsafe_allow_html=True)
     data["self_is_admin"] = c2.checkbox(
         "Admin", value=data.get("self_is_admin", True), key="admin_self", label_visibility="collapsed",
     )
 
     for m in data["team"]:
-        c1, c2, c3 = st.columns([4, 1, 0.6])
+        c1, c2, c3 = st.columns([4, 1, 0.6], wrap=False)
         c1.markdown(f"<div class='ts-card' style='padding:8px 10px;'>{lib.esc(m['name'])}</div>", unsafe_allow_html=True)
         m["is_admin"] = c2.checkbox(
             "Admin", value=m.get("is_admin", False), key=f"admin_{m['id']}", label_visibility="collapsed",
@@ -647,7 +667,7 @@ with top_m:
     )
 with top_r:
     person = current_person()
-    c1, c2, c3, c4 = st.columns([0.55, 0.5, 2.1, 0.95])
+    c1, c2, c3, c4 = st.columns([0.5, 0.45, 1.8, 0.8], gap="xsmall", wrap=False)
     if c1.button("", icon=":material/settings:", help="Settings"):
         open_dialog("settings_open")
         st.rerun()
@@ -694,7 +714,7 @@ is_future_week = current_week > lib.today_monday()
 # My Time
 # ---------------------------------------------------------------------------
 if active_tab == "My Time":
-    nav1, nav2, nav3, nav4, nav5 = st.columns([0.5, 2, 0.5, 0.7, 3])
+    nav1, nav2, nav3, nav4, nav5 = st.columns([0.5, 1.6, 0.5, 0.7, 1], gap="xsmall", wrap=False)
     if nav1.button("", icon=":material/chevron_left:", help="Previous week"):
         st.session_state.current_week = lib.shift_date(current_week, -7)
         st.rerun()
@@ -769,59 +789,60 @@ if active_tab == "My Time":
     if not week["rows"]:
         st.info("No projects added yet. Add one above to get started.")
     else:
-        widths = [1.9, 0.9] + [1] * 7 + [1.0, 0.4]
-        hdr = st.columns(widths)
-        hdr[0].markdown("<div class='ts-section-label'>Project</div>", unsafe_allow_html=True)
-        for i, d in enumerate(days):
-            color = C["text_secondary"] if d["active"] else C["text_muted"]
-            hdr[2 + i].markdown(
-                f"<div style='text-align:center;color:{color};'><div style='font-size:11.5px;font-weight:700;text-transform:uppercase;'>{d['label']}</div>"
-                f"<div style='font-size:11px;'>{d['date_label']}</div></div>",
-                unsafe_allow_html=True,
-            )
-        hdr[-2].markdown("<div class='ts-section-label' style='text-align:right;'>Total</div>", unsafe_allow_html=True)
-
-        for row in week["rows"]:
-            cols = st.columns(widths)
-            cols[0].markdown(f"**{lib.esc(row['name'])}**")
-            cols[1].button("Even", key=f"even_{row['id']}", on_click=fill_row_evenly, args=(row["id"],),
-                            disabled=locked, use_container_width=True, help="Apply first day's hours to all active days")
+        with st.container(key="hours_grid"):
+            widths = [1.9, 0.9] + [1] * 7 + [1.0, 0.4]
+            hdr = st.columns(widths, wrap=False)
+            hdr[0].markdown("<div class='ts-section-label'>Project</div>", unsafe_allow_html=True)
             for i, d in enumerate(days):
-                cell_key = f"cell_{row['id']}_{d['key']}"
-                # Omit `value=` once the key exists: fill_row_evenly/fill_remaining prime
-                # session_state directly, and passing both makes Streamlit warn.
-                extra = {} if cell_key in st.session_state else {"value": float(row["hours"][d["key"]])}
-                val = cols[2 + i].number_input(
-                    d["label"], min_value=0.0, max_value=24.0, step=0.5, key=cell_key,
-                    disabled=locked or not d["active"], label_visibility="collapsed", **extra,
+                color = C["text_secondary"] if d["active"] else C["text_muted"]
+                hdr[2 + i].markdown(
+                    f"<div style='text-align:center;color:{color};'><div style='font-size:11.5px;font-weight:700;text-transform:uppercase;'>{d['label']}</div>"
+                    f"<div style='font-size:11px;'>{d['date_label']}</div></div>",
+                    unsafe_allow_html=True,
                 )
-                row["hours"][d["key"]] = val
-            total = lib.row_total(row)
-            cols[-2].markdown(f"<div class='ts-mono ts-nowrap' style='text-align:right;font-weight:700;padding-top:8px;'>{lib.fmt_hours(total)}</div>", unsafe_allow_html=True)
-            cols[-1].button("", key=f"rm_{row['id']}", icon=":material/close:", help="Remove", on_click=remove_row, args=(row["id"],), disabled=locked)
-        save()
+            hdr[-2].markdown("<div class='ts-section-label' style='text-align:right;'>Total</div>", unsafe_allow_html=True)
 
-        footer = st.columns(widths)
-        footer[0].markdown("**Total**")
-        for i, d in enumerate(days):
-            day_total = sum(r["hours"][d["key"]] for r in week["rows"])
-            if d["active"]:
-                if day_total == d["target"]:
-                    bg, fg = C["success_tint"], C["success_text"]
-                elif day_total > d["target"]:
-                    bg, fg = C["progress_tint"], C["progress_text"]
-                    mismatch_days.append({"label": d["label"], "total": day_total, "target": d["target"]})
+            for row in week["rows"]:
+                cols = st.columns(widths, wrap=False)
+                cols[0].markdown(f"**{lib.esc(row['name'])}**")
+                cols[1].button("Even", key=f"even_{row['id']}", on_click=fill_row_evenly, args=(row["id"],),
+                                disabled=locked, use_container_width=True, help="Apply first day's hours to all active days")
+                for i, d in enumerate(days):
+                    cell_key = f"cell_{row['id']}_{d['key']}"
+                    # Omit `value=` once the key exists: fill_row_evenly/fill_remaining prime
+                    # session_state directly, and passing both makes Streamlit warn.
+                    extra = {} if cell_key in st.session_state else {"value": float(row["hours"][d["key"]])}
+                    val = cols[2 + i].number_input(
+                        d["label"], min_value=0.0, max_value=24.0, step=0.5, key=cell_key,
+                        disabled=locked or not d["active"], label_visibility="collapsed", **extra,
+                    )
+                    row["hours"][d["key"]] = val
+                total = lib.row_total(row)
+                cols[-2].markdown(f"<div class='ts-mono ts-nowrap' style='text-align:right;font-weight:700;padding-top:8px;'>{lib.fmt_hours(total)}</div>", unsafe_allow_html=True)
+                cols[-1].button("", key=f"rm_{row['id']}", icon=":material/close:", help="Remove", on_click=remove_row, args=(row["id"],), disabled=locked)
+            save()
+
+            footer = st.columns(widths, wrap=False)
+            footer[0].markdown("**Total**")
+            for i, d in enumerate(days):
+                day_total = sum(r["hours"][d["key"]] for r in week["rows"])
+                if d["active"]:
+                    if day_total == d["target"]:
+                        bg, fg = C["success_tint"], C["success_text"]
+                    elif day_total > d["target"]:
+                        bg, fg = C["progress_tint"], C["progress_text"]
+                        mismatch_days.append({"label": d["label"], "total": day_total, "target": d["target"]})
+                    else:
+                        bg, fg = C["progress_tint"], C["progress_text"]
+                        mismatch_days.append({"label": d["label"], "total": day_total, "target": d["target"]})
+                    display = f"{lib.fmt_hours(day_total)}/{lib.fmt_hours(d['target'])}"
                 else:
-                    bg, fg = C["progress_tint"], C["progress_text"]
-                    mismatch_days.append({"label": d["label"], "total": day_total, "target": d["target"]})
-                display = f"{lib.fmt_hours(day_total)}/{lib.fmt_hours(d['target'])}"
-            else:
-                bg, fg, display = "transparent", C["text_muted"], "—"
-            footer[2 + i].markdown(
-                f"<div class='ts-mono ts-nowrap' style='text-align:center;padding:6px 2px;border-radius:6px;background:{bg};color:{fg};font-size:12.5px;font-weight:700;'>{display}</div>",
-                unsafe_allow_html=True,
-            )
-        footer[-2].markdown(f"<div class='ts-mono ts-nowrap' style='text-align:right;font-weight:800;'>{lib.fmt_hours(week_total)}/{lib.fmt_hours(week_target)}</div>", unsafe_allow_html=True)
+                    bg, fg, display = "transparent", C["text_muted"], "—"
+                footer[2 + i].markdown(
+                    f"<div class='ts-mono ts-nowrap' style='text-align:center;padding:6px 2px;border-radius:6px;background:{bg};color:{fg};font-size:12.5px;font-weight:700;'>{display}</div>",
+                    unsafe_allow_html=True,
+                )
+            footer[-2].markdown(f"<div class='ts-mono ts-nowrap' style='text-align:right;font-weight:800;'>{lib.fmt_hours(week_total)}/{lib.fmt_hours(week_target)}</div>", unsafe_allow_html=True)
 
     st.write("")
     week["note"] = st.text_area(
@@ -918,18 +939,19 @@ elif active_tab == "My History":
             totalx = lib.week_total(wkx)
             targetx = lib.week_target(daysx)
             metax = lib.STATUS_META[wkx["status"]]
-            c1, c2, c3, c4, c5 = st.columns([2, 2, 1, 1.4, 1.6])
-            c1.markdown(f"**{lib.week_range_label(ws)}**" + (" · *current*" if ws == current_week else ""))
-            c2.caption(wkx.get("note") or "")
-            c3.markdown(pill(metax["label"], metax["bg"], metax["fg"]), unsafe_allow_html=True)
-            c4.markdown(f"<div class='ts-mono ts-nowrap' style='text-align:right;'>{lib.fmt_hours(totalx)}/{lib.fmt_hours(targetx)}h</div>", unsafe_allow_html=True)
-            c5.button("Open", key=f"open_{ws}", on_click=open_history_week, args=(ws,), use_container_width=True)
+            with st.container(key=f"history_row_{ws}"):
+                c1, c2, c3, c4, c5 = st.columns([2, 2, 1, 1.4, 1.6], wrap=False)
+                c1.markdown(f"**{lib.week_range_label(ws)}**" + (" · *current*" if ws == current_week else ""))
+                c2.caption(wkx.get("note") or "")
+                c3.markdown(pill(metax["label"], metax["bg"], metax["fg"]), unsafe_allow_html=True)
+                c4.markdown(f"<div class='ts-mono ts-nowrap' style='text-align:right;'>{lib.fmt_hours(totalx)}/{lib.fmt_hours(targetx)}h</div>", unsafe_allow_html=True)
+                c5.button("Open", key=f"open_{ws}", on_click=open_history_week, args=(ws,), use_container_width=True)
 
 # ---------------------------------------------------------------------------
 # My Team
 # ---------------------------------------------------------------------------
 elif active_tab == "My Team":
-    nav1, nav2, nav3, nav4 = st.columns([0.5, 2, 0.5, 0.7])
+    nav1, nav2, nav3, nav4 = st.columns([0.5, 2, 0.5, 0.7], wrap=False)
     if nav1.button("", icon=":material/chevron_left:", help="Previous week", key="team_prev"):
         st.session_state.current_week = lib.shift_date(current_week, -7)
         st.rerun()
@@ -977,8 +999,8 @@ elif active_tab == "My Team":
         })
 
     for member in roster:
-        with st.container(border=True):
-            c1, c2, c3, c4, c5, c6 = st.columns([0.5, 1.7, 1.1, 1.1, 1.4, 1.2])
+        with st.container(border=True, key=f"team_roster_row_{member['id']}"):
+            c1, c2, c3, c4, c5, c6 = st.columns([0.5, 1.7, 1.1, 1.1, 1.4, 1.2], wrap=False)
             c1.markdown(f"<div style='width:32px;height:32px;border-radius:50%;background:{member['avatar_bg']};color:{member['avatar_fg']};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12.5px;'>{member['initials']}</div>", unsafe_allow_html=True)
             c2.markdown(f"**{lib.esc(member['name'])}**")
             c3.markdown(pill(member["status"]["label"], member["status"]["bg"], member["status"]["fg"]), unsafe_allow_html=True)
