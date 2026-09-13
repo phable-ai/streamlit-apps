@@ -132,6 +132,12 @@ PERIOD_OPTIONS = ["4 weeks", "8 weeks", "12 weeks", "All time"]
 PERIOD_KEYS = {"4 weeks": 4, "8 weeks": 8, "12 weeks": 12, "All time": None}
 SCOPE_OPTIONS = ["All entries", "Projects only", "Non-project only"]
 
+# Common states across Azure DevOps' built-in process templates (Agile/Scrum/CMMI/Basic).
+# A given process/work item type may use others -- the picker also accepts free text.
+ADO_STATE_PRESETS = ["New", "Active", "Resolved", "Closed", "Removed", "In Progress", "Done", "Proposed"]
+ADO_DEFAULT_WORK_ITEM_TYPE = "Epic"
+ADO_DEFAULT_STATES = ["New", "Active"]
+
 
 def esc(text: str) -> str:
     """HTML-escape user-entered text before it goes into a markdown/HTML span."""
@@ -351,6 +357,8 @@ def seed_state() -> dict:
             "ado_org_url": "",
             "ado_project_name": "",
             "ado_connected": False,
+            "ado_work_item_type": ADO_DEFAULT_WORK_ITEM_TYPE,
+            "ado_states": list(ADO_DEFAULT_STATES),
             "storage_provider": "azureTable",
             "storage_target": "",
         },
@@ -368,6 +376,8 @@ def _backfill_fields(data: dict) -> dict:
             wk.setdefault("approved_at", None)
     data.setdefault("connections", {})
     data["connections"].setdefault("mode", "demo")
+    data["connections"].setdefault("ado_work_item_type", ADO_DEFAULT_WORK_ITEM_TYPE)
+    data["connections"].setdefault("ado_states", list(ADO_DEFAULT_STATES))
     data.setdefault("seed_version", SEED_VERSION)
     return data
 
@@ -513,6 +523,79 @@ def _test_ado_live(org_url: str, project_name: str, pat: str) -> tuple[bool, str
     if resp.status_code == 404:
         return False, f"Organization reachable, but project \"{project_name}\" wasn't found there."
     return False, f"Azure DevOps returned HTTP {resp.status_code}."
+
+
+def fetch_ado_work_items(mode: str, org_url: str, project_name: str, pat: str,
+                          work_item_type: str, states: list[str]) -> tuple[bool, str, list[dict]]:
+    """Preview which Azure DevOps work items would count as "projects" under
+    the configured work item type + included states, so the setting can be
+    checked against the real board rather than typed in blind."""
+    org_url = (org_url or "").strip()
+    project_name = (project_name or "").strip()
+    pat = pat or ""
+    work_item_type = (work_item_type or "").strip()
+    states = [s.strip() for s in (states or []) if s.strip()]
+    if not (org_url and project_name and pat.strip() and work_item_type and states):
+        return False, "Fill in the organization, project, work item type, and at least one state first.", []
+    if mode != "live":
+        return True, "Demo mode — no real query made. Switch to Live mode to preview real work items.", []
+    return _fetch_ado_work_items_live(org_url, project_name, pat.strip(), work_item_type, states)
+
+
+def _wiql_literal(value: str) -> str:
+    """Quote a string for embedding in a WIQL query -- WIQL has no parameterized
+    queries for this endpoint, so single quotes are doubled per its own syntax."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _fetch_ado_work_items_live(org_url: str, project_name: str, pat: str,
+                                work_item_type: str, states: list[str]) -> tuple[bool, str, list[dict]]:
+    import requests
+
+    org_url = org_url.rstrip("/")
+    states_clause = ", ".join(_wiql_literal(s) for s in states)
+    query = (
+        "SELECT [System.Id] FROM WorkItems "
+        f"WHERE [System.TeamProject] = @project AND [System.WorkItemType] = {_wiql_literal(work_item_type)} "
+        f"AND [System.State] IN ({states_clause})"
+    )
+    wiql_url = f"{org_url}/{project_name}/_apis/wit/wiql?api-version=7.1"
+    try:
+        resp = requests.post(wiql_url, auth=("", pat), json={"query": query}, timeout=15)
+    except requests.RequestException as e:
+        return False, f"Couldn't reach Azure DevOps: {e}", []
+    if resp.status_code == 401:
+        return False, "Authentication failed — check the personal access token. It needs at least 'Work Items (Read)' scope.", []
+    if resp.status_code == 404:
+        return False, f"Organization/project not found (or the token can't see it).", []
+    if resp.status_code != 200:
+        return False, f"Azure DevOps returned HTTP {resp.status_code} for the query.", []
+    try:
+        work_items = resp.json().get("workItems", [])
+    except ValueError:
+        return False, "Azure DevOps returned an unexpected response.", []
+    if not work_items:
+        return True, f"No {work_item_type} work items found in state(s) {', '.join(states)}.", []
+
+    ids = [str(w["id"]) for w in work_items[:200]]
+    detail_url = f"{org_url}/_apis/wit/workitems?ids={','.join(ids)}&fields=System.Title,System.State&api-version=7.1"
+    try:
+        detail_resp = requests.get(detail_url, auth=("", pat), timeout=15)
+    except requests.RequestException as e:
+        return True, f"Found {len(work_items)} matching work item(s), but couldn't fetch titles: {e}", []
+    items = []
+    if detail_resp.status_code == 200:
+        try:
+            for wi in detail_resp.json().get("value", []):
+                fields = wi.get("fields", {})
+                items.append({
+                    "id": wi.get("id"),
+                    "name": fields.get("System.Title", f"Work item {wi.get('id')}"),
+                    "state": fields.get("System.State", ""),
+                })
+        except ValueError:
+            pass
+    return True, f"Found {len(work_items)} matching {work_item_type} work item(s).", items
 
 
 def test_storage_connection(mode: str, provider_key: str, target: str, secret: str) -> tuple[bool, str]:

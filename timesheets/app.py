@@ -85,6 +85,7 @@ _DEFAULTS = {
     "ado_pat": "",  # session-only: never written to disk
     "storage_secret": "",  # session-only: never written to disk
     "ado_test_result": None,
+    "ado_preview_result": None,
     "storage_test_result": None,
 }
 for _k, _v in _DEFAULTS.items():
@@ -370,6 +371,7 @@ def _render_connections_section() -> None:
         # Live would look like a real Live-mode result it never was.
         conn["ado_connected"] = False
         st.session_state.ado_test_result = None
+        st.session_state.ado_preview_result = None
         st.session_state.storage_test_result = None
     conn["mode"] = new_mode
     if conn["mode"] == "live":
@@ -400,10 +402,39 @@ def _render_connections_section() -> None:
         for line in [
             "**Organization URL** — `https://dev.azure.com/<your-org>`, found under Organization Settings or in your browser's address bar.",
             "**Project name** — the exact project name (Project Settings → Overview, or the URL segment right after the org name).",
-            "**Personal access token** — top-right avatar → **Personal access tokens** → **New Token**. Grant at least **Project and Team (Read)**, set an expiry, and copy the token immediately — it's shown once.",
+            "**Personal access token** — top-right avatar → **Personal access tokens** → **New Token**. Grant at least **Project and Team (Read)**; add **Work Items (Read)** too if you'll use the preview below. Set an expiry and copy the token immediately — it's shown once.",
             "The token above is kept only for this browser session and is never written to disk.",
         ]:
             st.markdown(f"- {line}")
+
+    st.markdown("<div class='ts-section-label' style='margin-top:14px;'>Which work items are &quot;projects&quot;</div>", unsafe_allow_html=True)
+    st.caption("Pick the Azure DevOps work item type that represents a timesheet project, and which of its states count as current.")
+    conn["ado_work_item_type"] = st.text_input(
+        "Work item type", value=conn.get("ado_work_item_type", lib.ADO_DEFAULT_WORK_ITEM_TYPE),
+        placeholder="e.g. Epic, Feature, User Story, Issue",
+        help="The exact Azure DevOps work item type name (case-sensitive). Common choices for a project-level container are Epic or Feature.",
+    )
+    conn["ado_states"] = st.multiselect(
+        "Included states", options=lib.ADO_STATE_PRESETS,
+        default=conn.get("ado_states", lib.ADO_DEFAULT_STATES),
+        accept_new_options=True,
+        help="Only work items in these states are treated as active projects. Type to add a state from your own process template if it isn't listed.",
+    )
+    save()
+    if st.button("Preview matching work items", key="preview_ado_items", use_container_width=True):
+        ok, msg, items = lib.fetch_ado_work_items(
+            conn["mode"], conn["ado_org_url"], conn["ado_project_name"], st.session_state.ado_pat,
+            conn["ado_work_item_type"], conn["ado_states"],
+        )
+        st.session_state.ado_preview_result = (ok, msg, items)
+    if st.session_state.ado_preview_result:
+        ok, msg, items = st.session_state.ado_preview_result
+        (st.success if ok else st.error)(msg)
+        if items:
+            for it in items[:10]:
+                st.markdown(f"- **{lib.esc(it['name'])}** &nbsp; <span class='ts-muted'>{lib.esc(it['state'])}</span>", unsafe_allow_html=True)
+            if len(items) > 10:
+                st.caption(f"+{len(items) - 10} more")
 
     st.divider()
     st.markdown("<div class='ts-section-label'>Data storage</div>", unsafe_allow_html=True)
