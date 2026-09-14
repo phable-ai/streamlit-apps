@@ -119,6 +119,7 @@ def trend_chart_frame(week_starts: list[str], weeks_dict: dict, scope: str) -> t
     """
     fixed_order = [p["name"] for p in lib.PROJECTS] + [c["name"] for c in data["categories"]]
     weekly = lib.weekly_breakdown(week_starts, weeks_dict, scope)
+    multi_year = len({ws[:4] for ws in week_starts}) > 1
 
     present = {name for wk in weekly for name in wk["by_name"]}
     named_columns: list[str] = []
@@ -135,7 +136,10 @@ def trend_chart_frame(week_starts: list[str], weeks_dict: dict, scope: str) -> t
 
     records = []
     for wk in weekly:
-        row = {"Week": pd.Timestamp(wk["week_start"])}
+        label = lib.week_axis_label(wk["week_start"])
+        if multi_year:
+            label += f", {wk['week_start'][:4]}"
+        row = {"Week": label}
         for col in named_columns:
             row[col] = wk["by_name"].get(col, 0.0)
         if has_other:
@@ -1012,7 +1016,7 @@ elif active_tab == "My History":
             if trend_df.empty or trend_df.to_numpy().sum() == 0:
                 st.caption("No hours logged in this period.")
             else:
-                st.bar_chart(trend_df, color=trend_colors, stack=True, height=280, x_label="", y_label="Hours")
+                st.bar_chart(trend_df, color=trend_colors, stack=True, sort=False, height=280, x_label="", y_label="Hours")
 
     st.divider()
     st.caption("Past weeks you've logged. Select one to view or edit it.")

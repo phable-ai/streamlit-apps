@@ -216,6 +216,14 @@ def week_range_label(week_start: str) -> str:
     return f"{start.strftime('%b %-d')} – {end.strftime('%b %-d')}, {end.year}"
 
 
+def week_axis_label(week_start: str) -> str:
+    """Short per-week label ("Sep 7") for the trend chart's x-axis -- used
+    as a discrete/ordinal category rather than a continuous date so weeks
+    with no hours still get their own evenly-spaced bar slot instead of
+    leaving a gap, and axis ticks always land on real week-start dates."""
+    return date.fromisoformat(week_start).strftime("%b %-d")
+
+
 def default_working_week() -> dict:
     wk = {k: {"active": True, "hours": 8.0} for k in DAY_KEYS[:5]}
     wk["sat"] = {"active": False, "hours": 0.0}
