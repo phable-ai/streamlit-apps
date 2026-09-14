@@ -11,6 +11,7 @@ checks) — see lib.py's test_ado_connection/test_storage_connection.
 
 import json
 
+import pandas as pd
 import streamlit as st
 from st_keyup import st_keyup
 
@@ -104,24 +105,44 @@ def bar(name: str, hours_display: str, pct: int, kind: str) -> str:
     """
 
 
-def trend_bar(label: str, total: float, target: float, is_current: bool) -> str:
-    """One week's bar for the trend view: length is % of that week's own target
-    (capped visually at 100%, actual hours always shown), colored to match the
-    at/under-target language already used elsewhere (My Time's day totals)."""
-    pct = min(100, round(total / target * 100)) if target > 0 else 0
-    on_target = target > 0 and total >= target
-    fill_color = C["accent"] if on_target else C["category_bar"]
-    detail = f"{lib.fmt_hours(total)}h" + (f" / {lib.fmt_hours(target)}h" if target > 0 else "")
-    current_tag = " &middot; <span class='ts-muted'>current</span>" if is_current else ""
-    return f"""
-    <div style="margin-bottom:12px;">
-      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px;">
-        <div style="font-weight:600;">{lib.esc(label)}{current_tag}</div>
-        <div class="ts-mono" style="font-weight:700;color:{C['text_secondary']};">{detail}</div>
-      </div>
-      <div class="ts-bar-track"><div class="ts-bar-fill" style="width:{pct}%;background:{fill_color};"></div></div>
-    </div>
+def trend_chart_frame(week_starts: list[str], weeks_dict: dict, scope: str) -> tuple[pd.DataFrame, list[str]]:
+    """Wide-format weekly-hours-by-project frame for st.bar_chart, plus the
+    matching color list (same order as the columns).
+
+    Column order -- and therefore color assignment -- follows a FIXED master
+    order (every real project, then every category, in their stable app-wide
+    order) rather than each render's own totals, so a given project keeps the
+    same color as the Period/Scope filters change instead of being reshuffled
+    by rank. Entities past the 8 validated categorical slots, or not in the
+    fixed list (e.g. a since-removed category), fold into one neutral "Other"
+    column rather than making up a new hue.
     """
+    fixed_order = [p["name"] for p in lib.PROJECTS] + [c["name"] for c in data["categories"]]
+    weekly = lib.weekly_breakdown(week_starts, weeks_dict, scope)
+
+    present = {name for wk in weekly for name in wk["by_name"]}
+    named_columns: list[str] = []
+    colors: list[str] = []
+    for idx, n in enumerate(fixed_order):
+        if idx >= len(lib.CHART_CATEGORICAL):
+            break
+        if n in present:
+            named_columns.append(n)
+            colors.append(lib.CHART_CATEGORICAL[idx])
+    has_other = any(n not in named_columns for n in present)
+    columns = named_columns + (["Other"] if has_other else [])
+    colors = colors + ([lib.CHART_OTHER] if has_other else [])
+
+    records = []
+    for wk in weekly:
+        row = {"Week": pd.Timestamp(wk["week_start"])}
+        for col in named_columns:
+            row[col] = wk["by_name"].get(col, 0.0)
+        if has_other:
+            row["Other"] = sum(h for n, h in wk["by_name"].items() if n not in named_columns)
+        records.append(row)
+    df = pd.DataFrame(records).set_index("Week")
+    return df[columns] if columns else df, colors
 
 
 # ---------------------------------------------------------------------------
@@ -987,12 +1008,11 @@ elif active_tab == "My History":
             else:
                 st.caption("No hours logged in this period.")
         else:
-            trend = lib.build_trend(week_starts, viewer["weeks_dict"], data["working_week"], scope)
-            if any(t["total"] > 0 for t in trend):
-                for t in trend:
-                    st.markdown(trend_bar(t["label"], t["total"], t["target"], t["week_start"] == current_week), unsafe_allow_html=True)
-            else:
+            trend_df, trend_colors = trend_chart_frame(week_starts, viewer["weeks_dict"], scope)
+            if trend_df.empty or trend_df.to_numpy().sum() == 0:
                 st.caption("No hours logged in this period.")
+            else:
+                st.bar_chart(trend_df, color=trend_colors, stack=True, height=280, x_label="", y_label="Hours")
 
     st.divider()
     st.caption("Past weeks you've logged. Select one to view or edit it.")

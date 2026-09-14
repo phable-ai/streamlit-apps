@@ -64,6 +64,14 @@ AVATAR_TINTS = [
     ("#f3d7cb", "#762100"),
 ]
 
+# Validated categorical palette (light mode) for the weekly trend chart --
+# fixed hue order (never cycled/reassigned by rank), passes CVD + normal-
+# vision separation on the adjacent pairlist for stacked bars. Entities
+# beyond these 8 slots, or not in the fixed project/category order, fold
+# into a neutral "Other" bucket rather than getting a generated hue.
+CHART_CATEGORICAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
+CHART_OTHER = "#c7c3ba"
+
 STATUS_META = {
     "draft": {"label": "Draft", "bg": "#f0ede9", "fg": "#4c453f"},
     "submitted": {"label": "Submitted", "bg": COLOR["accent_tint"], "fg": COLOR["accent_tint_text"]},
@@ -482,23 +490,26 @@ def build_breakdown(weeks_iter, scope: str) -> tuple[list[dict], float]:
     return items, total
 
 
-def build_trend(week_starts: list[str], weeks_dict: dict, working_week: dict, scope: str) -> list[dict]:
-    """Per-week totals (oldest first, for a left-to-right trend) against each
-    week's own target -- a "how has my time trended" complement to
-    build_breakdown's period-total proportions."""
+def weekly_breakdown(week_starts: list[str], weeks_dict: dict, scope: str) -> list[dict]:
+    """Per-week (oldest first, for a left-to-right trend), per-row-name hours --
+    a "how has my time trended" complement to build_breakdown's period-total
+    proportions, broken out by project/category so it can be charted as a
+    stacked bar with the week along the x-axis."""
     rows = []
     for ws in sorted(week_starts):
         wk = weeks_dict.get(ws)
-        total = 0.0
+        by_name: dict[str, float] = {}
         if wk:
             for r in wk["rows"]:
                 if scope == "Projects only" and r["kind"] != "project":
                     continue
                 if scope == "Non-project only" and r["kind"] != "category":
                     continue
-                total += row_total(r)
-        target = week_target(day_meta(ws, working_week))
-        rows.append({"week_start": ws, "label": week_range_label(ws), "total": total, "target": target})
+                rt = row_total(r)
+                if rt <= 0:
+                    continue
+                by_name[r["name"]] = by_name.get(r["name"], 0.0) + rt
+        rows.append({"week_start": ws, "by_name": by_name})
     return rows
 
 
