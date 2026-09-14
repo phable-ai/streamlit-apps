@@ -428,17 +428,24 @@ def persist(data: dict) -> None:
         pass
 
 
+def get_week_from(weeks_dict: dict, week_start: str) -> dict:
+    """Look up (creating if missing) the week record for `week_start` in any
+    person's week-keyed store -- data["weeks"] for self, or a team member's
+    "weeks" dict. get_week/get_member_week are thin wrappers over this for
+    the two concrete cases; callers that already hold a person-agnostic
+    weeks_dict (e.g. from a "current viewer" abstraction) can use it directly."""
+    if week_start not in weeks_dict:
+        weeks_dict[week_start] = _empty_week()
+    return weeks_dict[week_start]
+
+
 def get_week(data: dict, week_start: str) -> dict:
-    if week_start not in data["weeks"]:
-        data["weeks"][week_start] = _empty_week()
-    return data["weeks"][week_start]
+    return get_week_from(data["weeks"], week_start)
 
 
 def get_member_week(member: dict, week_start: str) -> dict:
     member.setdefault("weeks", {})
-    if week_start not in member["weeks"]:
-        member["weeks"][week_start] = _empty_week()
-    return member["weeks"][week_start]
+    return get_week_from(member["weeks"], week_start)
 
 
 def week_total(week: dict) -> float:
@@ -483,6 +490,19 @@ def period_week_starts(period_label: str, data: dict, include_team: bool = False
         if include_team:
             for m in data["team"]:
                 keys.update(m.get("weeks", {}).keys())
+        keys.add(tm)
+        return sorted(keys)
+    return [shift_date(tm, -7 * i) for i in range(n)]
+
+
+def person_period_week_starts(period_label: str, weeks_dict: dict) -> list[str]:
+    """Same as period_week_starts, but scoped to one person's own weeks_dict
+    (self or a team member) instead of always data["weeks"] -- for a "My
+    History" that follows whoever is currently being viewed."""
+    tm = today_monday()
+    n = PERIOD_KEYS[period_label]
+    if n is None:
+        keys = set(weeks_dict.keys())
         keys.add(tm)
         return sorted(keys)
     return [shift_date(tm, -7 * i) for i in range(n)]

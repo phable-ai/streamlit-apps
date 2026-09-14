@@ -143,24 +143,37 @@ def save() -> None:
 
 def current_person() -> dict:
     """Who the "Viewing as" switcher in the top bar says you are right now --
-    a demo/testing stand-in for real per-user login, so admin-only UI (Approve/
-    Release, Settings' Team/Categories/Connections) can be checked both ways."""
+    a demo/testing stand-in for real per-user login. Drives admin-only UI
+    (Approve/Release, Settings' Team/Categories/Connections) AND which
+    timesheet My Time/My History actually read and edit -- "weeks_dict" is
+    that person's own week-keyed store (data["weeks"] for self, otherwise
+    their team-member record's "weeks") so switching viewer genuinely
+    switches whose data you're looking at, not just the permission badge."""
     uid = st.session_state.current_user_id
     if uid == "self":
         return {
             "id": "self", "name": "Morgan Lee", "initials": "ML",
             "avatar_bg": C["accent_tint"], "avatar_fg": C["accent_tint_text"],
             "is_admin": data.get("self_is_admin", True),
+            "weeks_dict": data["weeks"],
         }
     for idx, m in enumerate(data["team"]):
         if m["id"] == uid:
             tint, tint_text = lib.AVATAR_TINTS[idx % len(lib.AVATAR_TINTS)]
+            m.setdefault("weeks", {})
             return {
                 "id": m["id"], "name": m["name"], "initials": lib.initials_of(m["name"]),
                 "avatar_bg": tint, "avatar_fg": tint_text, "is_admin": m.get("is_admin", False),
+                "weeks_dict": m["weeks"],
             }
     st.session_state.current_user_id = "self"
     return current_person()
+
+
+def current_week_dict() -> dict:
+    """The currently-viewed person's week record for st.session_state.current_week,
+    creating it if this is the first time they've touched that week."""
+    return lib.get_week_from(current_person()["weeks_dict"], st.session_state.current_week)
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +181,7 @@ def current_person() -> dict:
 # session_state of OTHER already-instantiated widgets before the next rerun)
 # ---------------------------------------------------------------------------
 def add_row(kind: str, ref_id: str, name: str) -> None:
-    week = lib.get_week(data, st.session_state.current_week)
+    week = current_week_dict()
     if any(r["ref_id"] == ref_id for r in week["rows"]):
         return
     week["rows"].append({"id": lib.new_id("row"), "kind": kind, "ref_id": ref_id, "name": name, "hours": lib.empty_hours()})
@@ -179,14 +192,14 @@ def add_row(kind: str, ref_id: str, name: str) -> None:
 
 
 def remove_row(row_id: str) -> None:
-    week = lib.get_week(data, st.session_state.current_week)
+    week = current_week_dict()
     week["rows"] = [r for r in week["rows"] if r["id"] != row_id]
     save()
 
 
 def fill_row_evenly(row_id: str) -> None:
     week_start = st.session_state.current_week
-    week = lib.get_week(data, week_start)
+    week = current_week_dict()
     if week["status"] != "draft":
         return
     row = next((r for r in week["rows"] if r["id"] == row_id), None)
@@ -207,7 +220,7 @@ def fill_row_evenly(row_id: str) -> None:
 
 def fill_remaining() -> None:
     week_start = st.session_state.current_week
-    week = lib.get_week(data, week_start)
+    week = current_week_dict()
     if week["status"] != "draft" or not week["rows"]:
         return
     days = lib.day_meta(week_start, data["working_week"])
@@ -231,11 +244,11 @@ def fill_remaining() -> None:
 
 def copy_last_week() -> None:
     week_start = st.session_state.current_week
-    prev = lib.get_week(data, lib.shift_date(week_start, -7))
+    prev = lib.get_week_from(current_person()["weeks_dict"], lib.shift_date(week_start, -7))
     if not prev["rows"]:
         st.toast("No projects logged last week")
         return
-    week = lib.get_week(data, week_start)
+    week = current_week_dict()
     existing_refs = {r["ref_id"] for r in week["rows"]}
     to_add = [
         {"id": lib.new_id("row"), "kind": r["kind"], "ref_id": r["ref_id"], "name": r["name"], "hours": lib.empty_hours()}
@@ -251,7 +264,7 @@ def copy_last_week() -> None:
 
 def submit_week() -> None:
     from datetime import datetime
-    week = lib.get_week(data, st.session_state.current_week)
+    week = current_week_dict()
     week["status"] = "submitted"
     week["submitted_at"] = datetime.now().isoformat(timespec="seconds")
     save()
@@ -259,7 +272,7 @@ def submit_week() -> None:
 
 
 def edit_week() -> None:
-    week = lib.get_week(data, st.session_state.current_week)
+    week = current_week_dict()
     if week["status"] != "submitted":
         return
     week["status"] = "draft"
@@ -706,7 +719,11 @@ with top_r:
 active_tab = active_tab or "My Time"
 current_week = st.session_state.current_week
 days = lib.day_meta(current_week, data["working_week"])
-week = lib.get_week(data, current_week)
+viewer = current_person()
+# "My Time"/"My History" show and edit whoever's currently selected in "Viewing
+# as" -- NOT necessarily Morgan -- so this must come from their own weeks_dict,
+# not a hardcoded lib.get_week(data, ...) (which is always Morgan's).
+week = lib.get_week_from(viewer["weeks_dict"], current_week)
 locked = week["status"] in ("submitted", "approved")
 is_future_week = current_week > lib.today_monday()
 
@@ -848,7 +865,7 @@ if active_tab == "My Time":
     week["note"] = st.text_area(
         "Anything we should know? (optional)", value=week.get("note", ""),
         placeholder="e.g. out sick Wednesday afternoon, conference travel...",
-        height=68, disabled=locked, key=f"note_{current_week}",
+        height=68, disabled=locked, key=f"note_{viewer['id']}_{current_week}",
     )
     save()
 
@@ -903,8 +920,8 @@ elif active_tab == "My History":
     period = period or "8 weeks"
     scope = scope or "All entries"
 
-    week_starts = lib.period_week_starts(period, data)
-    weeks_iter = [data["weeks"][w] for w in week_starts if w in data["weeks"]]
+    week_starts = lib.person_period_week_starts(period, viewer["weeks_dict"])
+    weeks_iter = [viewer["weeks_dict"][w] for w in week_starts if w in viewer["weeks_dict"]]
     breakdown, total_hours = lib.build_breakdown(weeks_iter, scope)
     weeks_with_data = sum(1 for w in weeks_iter if w["rows"])
     weeks_submitted = sum(1 for w in weeks_iter if w["status"] in ("submitted", "approved"))
@@ -929,12 +946,12 @@ elif active_tab == "My History":
 
     st.divider()
     st.caption("Past weeks you've logged. Select one to view or edit it.")
-    history_weeks = sorted((w for w in data["weeks"] if data["weeks"][w]["rows"]), reverse=True)
+    history_weeks = sorted((w for w in viewer["weeks_dict"] if viewer["weeks_dict"][w]["rows"]), reverse=True)
     if not history_weeks:
         st.info("No timesheet history yet.")
     else:
         for ws in history_weeks:
-            wkx = data["weeks"][ws]
+            wkx = viewer["weeks_dict"][ws]
             daysx = lib.day_meta(ws, data["working_week"])
             totalx = lib.week_total(wkx)
             targetx = lib.week_target(daysx)
@@ -980,13 +997,17 @@ elif active_tab == "My Team":
     s3.markdown(f"<div class='ts-card'><div class='ts-mono' style='font-size:22px;font-weight:800;'>{lib.fmt_hours(hours_logged)}/{lib.fmt_hours(hours_target)}</div><div class='ts-muted'>Hours logged</div></div>", unsafe_allow_html=True)
 
     st.write("")
-    self_total = lib.week_total(week)
-    self_meta = lib.STATUS_META[week["status"]]
+    # The roster always lists Morgan specifically here, regardless of who "Viewing
+    # as" currently has selected -- `week` above follows the viewer for My Time/My
+    # History, so this needs its own always-Morgan lookup rather than reusing it.
+    morgan_week = lib.get_week(data, current_week)
+    self_total = lib.week_total(morgan_week)
+    self_meta = lib.STATUS_META[morgan_week["status"]]
     roster = [{
         "id": "self", "name": "Morgan Lee (You)", "initials": "ML",
         "avatar_bg": C["accent_tint"], "avatar_fg": C["accent_tint_text"],
-        "status": self_meta, "status_key": week["status"], "total": self_total, "target": week_target,
-        "submitted_at": week["submitted_at"], "rows": week["rows"], "week_ref": week,
+        "status": self_meta, "status_key": morgan_week["status"], "total": self_total, "target": week_target,
+        "submitted_at": morgan_week["submitted_at"], "rows": morgan_week["rows"], "week_ref": morgan_week,
     }]
     for idx, m in enumerate(data["team"]):
         mwk = lib.get_member_week(m, current_week)
