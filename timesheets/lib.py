@@ -482,6 +482,26 @@ def build_breakdown(weeks_iter, scope: str) -> tuple[list[dict], float]:
     return items, total
 
 
+def build_trend(week_starts: list[str], weeks_dict: dict, working_week: dict, scope: str) -> list[dict]:
+    """Per-week totals (oldest first, for a left-to-right trend) against each
+    week's own target -- a "how has my time trended" complement to
+    build_breakdown's period-total proportions."""
+    rows = []
+    for ws in sorted(week_starts):
+        wk = weeks_dict.get(ws)
+        total = 0.0
+        if wk:
+            for r in wk["rows"]:
+                if scope == "Projects only" and r["kind"] != "project":
+                    continue
+                if scope == "Non-project only" and r["kind"] != "category":
+                    continue
+                total += row_total(r)
+        target = week_target(day_meta(ws, working_week))
+        rows.append({"week_start": ws, "label": week_range_label(ws), "total": total, "target": target})
+    return rows
+
+
 def period_week_starts(period_label: str, data: dict, include_team: bool = False) -> list[str]:
     tm = today_monday()
     n = PERIOD_KEYS[period_label]

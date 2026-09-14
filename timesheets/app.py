@@ -63,6 +63,24 @@ st.markdown(
       [class*="st-key-team_roster_row_"] div[data-testid="stHorizontalBlock"][data-test-wrap="false"] > div[data-testid="stColumn"] {{
         min-width: 92px !important;
       }}
+      /* A no-wrap row that's a couple of px short of fitting shows a thin
+         scrollbar-on-hover even though nothing meaningful is cut off -- these
+         rows were all sized to fit, so hide the browser's scroll affordance
+         without disabling the actual scroll (still swipeable on mobile where
+         a row genuinely doesn't fit, e.g. the hours grid or History/Team rows). */
+      div[data-testid="stHorizontalBlock"][data-test-wrap="false"] {{
+        scrollbar-width: none;
+      }}
+      div[data-testid="stHorizontalBlock"][data-test-wrap="false"]::-webkit-scrollbar {{
+        display: none;
+      }}
+      /* st.container(key=...) has no styling of its own -- these two give the
+         breakdown/trend cards the same look as the .ts-card markdown-built ones
+         used elsewhere, since real widgets inside them (segmented_control) can't
+         be part of a raw HTML string the way the stat tiles above are. */
+      .st-key-history_breakdown_card, .st-key-team_by_project_card {{
+        background: {C['white']}; border: 1px solid {C['border']}; border-radius: 12px; padding: 14px 16px;
+      }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -80,6 +98,26 @@ def bar(name: str, hours_display: str, pct: int, kind: str) -> str:
       <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px;">
         <div style="font-weight:600;">{lib.esc(name)}</div>
         <div class="ts-mono" style="font-weight:700;color:{C['text_secondary']};">{hours_display}h &middot; {pct}%</div>
+      </div>
+      <div class="ts-bar-track"><div class="ts-bar-fill" style="width:{pct}%;background:{fill_color};"></div></div>
+    </div>
+    """
+
+
+def trend_bar(label: str, total: float, target: float, is_current: bool) -> str:
+    """One week's bar for the trend view: length is % of that week's own target
+    (capped visually at 100%, actual hours always shown), colored to match the
+    at/under-target language already used elsewhere (My Time's day totals)."""
+    pct = min(100, round(total / target * 100)) if target > 0 else 0
+    on_target = target > 0 and total >= target
+    fill_color = C["accent"] if on_target else C["category_bar"]
+    detail = f"{lib.fmt_hours(total)}h" + (f" / {lib.fmt_hours(target)}h" if target > 0 else "")
+    current_tag = " &middot; <span class='ts-muted'>current</span>" if is_current else ""
+    return f"""
+    <div style="margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px;">
+        <div style="font-weight:600;">{lib.esc(label)}{current_tag}</div>
+        <div class="ts-mono" style="font-weight:700;color:{C['text_secondary']};">{detail}</div>
       </div>
       <div class="ts-bar-track"><div class="ts-bar-fill" style="width:{pct}%;background:{fill_color};"></div></div>
     </div>
@@ -935,14 +973,26 @@ elif active_tab == "My History":
     m3.markdown(f"<div class='ts-card'><div class='ts-mono' style='font-size:22px;font-weight:800;'>{weeks_submitted}/{len(week_starts)}</div><div class='ts-muted'>Weeks submitted</div>{extra}</div>", unsafe_allow_html=True)
 
     st.write("")
-    st.markdown("<div class='ts-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='ts-section-label'>Where your time went</div>", unsafe_allow_html=True)
-    if breakdown:
-        for b in breakdown:
-            st.markdown(bar(b["name"], lib.fmt_hours(b["hours"]), b["pct"], b["kind"]), unsafe_allow_html=True)
-    else:
-        st.caption("No hours logged in this period.")
-    st.markdown("</div>", unsafe_allow_html=True)
+    with st.container(key="history_breakdown_card"):
+        label_col, view_col = st.columns([2, 1.4])
+        label_col.markdown("<div class='ts-section-label' style='padding-top:6px;'>Where your time went</div>", unsafe_allow_html=True)
+        breakdown_view = view_col.segmented_control(
+            "View", ["Breakdown", "Trend"], default="Breakdown", key="history_view", label_visibility="collapsed",
+        )
+        breakdown_view = breakdown_view or "Breakdown"
+        if breakdown_view == "Breakdown":
+            if breakdown:
+                for b in breakdown:
+                    st.markdown(bar(b["name"], lib.fmt_hours(b["hours"]), b["pct"], b["kind"]), unsafe_allow_html=True)
+            else:
+                st.caption("No hours logged in this period.")
+        else:
+            trend = lib.build_trend(week_starts, viewer["weeks_dict"], data["working_week"], scope)
+            if any(t["total"] > 0 for t in trend):
+                for t in trend:
+                    st.markdown(trend_bar(t["label"], t["total"], t["target"], t["week_start"] == current_week), unsafe_allow_html=True)
+            else:
+                st.caption("No hours logged in this period.")
 
     st.divider()
     st.caption("Past weeks you've logged. Select one to view or edit it.")
@@ -1052,31 +1102,30 @@ elif active_tab == "My Team":
                         st.markdown(f"**{lib.esc(r['name'])}** &nbsp; <span class='ts-muted'>{breakdown_str}</span> &nbsp; <span class='ts-mono' style='font-weight:700;'>{lib.fmt_hours(rt)}h</span>", unsafe_allow_html=True)
 
     st.write("")
-    st.markdown("<div class='ts-card'>", unsafe_allow_html=True)
-    tc1, tc2 = st.columns([1, 3])
-    tc1.markdown("<div class='ts-section-label' style='padding-top:6px;'>Team time by project</div>", unsafe_allow_html=True)
-    with tc2:
-        p1, p2 = st.columns(2)
-        team_period = p1.segmented_control("Team period", lib.PERIOD_OPTIONS, default="8 weeks", key="team_period", label_visibility="collapsed")
-        team_scope = p2.segmented_control("Team scope", lib.SCOPE_OPTIONS, default="All entries", key="team_scope", label_visibility="collapsed")
-    team_period = team_period or "8 weeks"
-    team_scope = team_scope or "All entries"
+    with st.container(key="team_by_project_card"):
+        tc1, tc2 = st.columns([1, 3])
+        tc1.markdown("<div class='ts-section-label' style='padding-top:6px;'>Team time by project</div>", unsafe_allow_html=True)
+        with tc2:
+            p1, p2 = st.columns(2)
+            team_period = p1.segmented_control("Team period", lib.PERIOD_OPTIONS, default="8 weeks", key="team_period", label_visibility="collapsed")
+            team_scope = p2.segmented_control("Team scope", lib.SCOPE_OPTIONS, default="All entries", key="team_scope", label_visibility="collapsed")
+        team_period = team_period or "8 weeks"
+        team_scope = team_scope or "All entries"
 
-    team_week_starts = lib.period_week_starts(team_period, data, include_team=True)
-    team_weeks_iter = []
-    for ws in team_week_starts:
-        if ws in data["weeks"]:
-            team_weeks_iter.append(data["weeks"][ws])
-        for m in data["team"]:
-            if ws in m.get("weeks", {}):
-                team_weeks_iter.append(m["weeks"][ws])
-    team_breakdown, _ = lib.build_breakdown(team_weeks_iter, team_scope)
-    if team_breakdown:
-        for b in team_breakdown:
-            st.markdown(bar(b["name"], lib.fmt_hours(b["hours"]), b["pct"], b["kind"]), unsafe_allow_html=True)
-    else:
-        st.caption("No hours logged in this period.")
-    st.markdown("</div>", unsafe_allow_html=True)
+        team_week_starts = lib.period_week_starts(team_period, data, include_team=True)
+        team_weeks_iter = []
+        for ws in team_week_starts:
+            if ws in data["weeks"]:
+                team_weeks_iter.append(data["weeks"][ws])
+            for m in data["team"]:
+                if ws in m.get("weeks", {}):
+                    team_weeks_iter.append(m["weeks"][ws])
+        team_breakdown, _ = lib.build_breakdown(team_weeks_iter, team_scope)
+        if team_breakdown:
+            for b in team_breakdown:
+                st.markdown(bar(b["name"], lib.fmt_hours(b["hours"]), b["pct"], b["kind"]), unsafe_allow_html=True)
+        else:
+            st.caption("No hours logged in this period.")
 
 # ---------------------------------------------------------------------------
 # Backup (Community Cloud storage is ephemeral across redeploys/reboots)
