@@ -94,6 +94,14 @@ DEFAULT_CATEGORIES = [
     {"id": "c4", "name": "Training"},
     {"id": "c5", "name": "Internal / Admin Time"},
 ]
+
+# Synthetic "category" row used for taking accrued TOIL/Flexi back -- kept
+# out of DEFAULT_CATEGORIES/data["categories"] so it can't be renamed or
+# deleted from the ordinary Categories admin screen, and so it's reliably
+# identifiable (by ref_id) when computing accrual.
+TOIL_TAKEN_ID = "toil-flexi-taken"
+TOIL_TAKEN_NAME = "TOIL / Flexi Taken"
+
 STORAGE_PROVIDERS = [
     {
         "key": "azureTable",
@@ -229,6 +237,10 @@ def default_working_week() -> dict:
     wk["sat"] = {"active": False, "hours": 0.0}
     wk["sun"] = {"active": False, "hours": 0.0}
     return wk
+
+
+def default_toil_config() -> dict:
+    return {"enabled": False, "expiry_weeks": 8, "max_accrual_hours": 40.0}
 
 
 def day_meta(week_start: str, working_week: dict) -> list[dict]:
@@ -385,6 +397,7 @@ def seed_state() -> dict:
         "weeks": weeks,
         "team": team,
         "self_is_admin": True,
+        "toil": default_toil_config(),
         "connections": {
             "mode": "demo",
             "ado_org_url": "",
@@ -409,6 +422,7 @@ def _backfill_fields(data: dict) -> dict:
             wk.setdefault("approved_at", None)
         m.setdefault("is_admin", False)
     data.setdefault("self_is_admin", True)
+    data.setdefault("toil", default_toil_config())
     data.setdefault("connections", {})
     data["connections"].setdefault("mode", "demo")
     data["connections"].setdefault("ado_work_item_type", ADO_DEFAULT_WORK_ITEM_TYPE)
@@ -474,6 +488,71 @@ def week_target(days: list[dict]) -> float:
 
 def row_total(row: dict) -> float:
     return sum(row["hours"].values())
+
+
+def compute_toil_balance(weeks_dict: dict, working_week: dict, toil_cfg: dict) -> float:
+    """Current TOIL/Flexi balance, derived fresh from timesheet rows every
+    call (not a stored counter) so editing any past week automatically
+    keeps it correct.
+
+    Each *completed* week (the current, still-in-progress week never
+    accrues) where logged hours exceed that week's target grants the
+    excess as TOIL, capped so the running balance never exceeds
+    max_accrual_hours. Grants lapse (expire) expiry_weeks after the week
+    they were earned if unused; TOIL_TAKEN_ID rows draw down the oldest
+    unexpired grants first (FIFO). A week's own TOIL-taken hours are
+    excluded from that same week's excess calculation, so taking TOIL
+    never generates more TOIL in the same motion.
+    """
+    if not toil_cfg.get("enabled"):
+        return 0.0
+    expiry_weeks = int(toil_cfg.get("expiry_weeks") or 0)
+    max_hours = float(toil_cfg.get("max_accrual_hours") or 0.0)
+    today = today_monday()
+
+    grants: list[dict] = []  # [{"week_start": ws, "remaining": float}]
+    balance = 0.0
+    for ws in sorted(w for w in weeks_dict if w <= today):
+        wk = weeks_dict[ws]
+        if not wk["rows"]:
+            continue
+
+        if expiry_weeks > 0:
+            cutoff = shift_date(ws, -7 * expiry_weeks)
+            for g in grants:
+                if g["week_start"] < cutoff:
+                    balance -= g["remaining"]
+                    g["remaining"] = 0.0
+            grants = [g for g in grants if g["remaining"] > 0]
+
+        taken = sum(row_total(r) for r in wk["rows"] if r["ref_id"] == TOIL_TAKEN_ID)
+        to_consume = taken
+        for g in grants:
+            if to_consume <= 0:
+                break
+            use = min(g["remaining"], to_consume)
+            g["remaining"] -= use
+            to_consume -= use
+            balance -= use
+        grants = [g for g in grants if g["remaining"] > 0]
+
+        if ws < today:
+            eligible_total = week_total(wk) - taken
+            target = week_target(day_meta(ws, working_week))
+            excess = max(0.0, eligible_total - target)
+            room = max(0.0, max_hours - balance)
+            grant_amt = min(excess, room)
+            if grant_amt > 0:
+                grants.append({"week_start": ws, "remaining": grant_amt})
+                balance += grant_amt
+
+    if expiry_weeks > 0:
+        cutoff = shift_date(today, -7 * expiry_weeks)
+        for g in grants:
+            if g["week_start"] < cutoff:
+                balance -= g["remaining"]
+
+    return round(max(0.0, balance), 2)
 
 
 def build_breakdown(weeks_iter, scope: str) -> tuple[list[dict], float]:

@@ -489,6 +489,30 @@ def _render_categories_section() -> None:
     c2.button("Add", on_click=add_category, disabled=not st.session_state.new_category_name.strip())
 
 
+def _render_toil_section() -> None:
+    toil = data.setdefault("toil", lib.default_toil_config())
+    st.markdown(
+        "**TOIL / Flexi**  \n<span class='ts-muted'>Bank hours worked beyond a week's target as time off in "
+        "lieu, and let people take it back later under Leave &amp; Other.</span>",
+        unsafe_allow_html=True,
+    )
+    toil["enabled"] = st.toggle("Enable TOIL / Flexi accrual", value=toil.get("enabled", False), key="toil_enabled")
+    c1, c2 = st.columns(2)
+    toil["expiry_weeks"] = c1.number_input(
+        "Weeks allowed to accrue for", min_value=1, max_value=52,
+        value=int(toil.get("expiry_weeks", 8)), step=1, key="toil_expiry_weeks",
+        help="TOIL not taken within this many weeks of being earned expires.",
+    )
+    toil["max_accrual_hours"] = c2.number_input(
+        "Maximum accrual (hours)", min_value=0.0, max_value=500.0,
+        value=float(toil.get("max_accrual_hours", 40.0)), step=1.0, key="toil_max_hours",
+        help="The running balance is capped here even if more overtime is worked.",
+    )
+    if not toil["enabled"]:
+        st.caption("Off — no new hours accrue and \"TOIL / Flexi Taken\" is hidden from Leave & Other. Past entries stay in history.")
+    save()
+
+
 def _render_connections_section() -> None:
     conn = data["connections"]
     st.markdown("**Connections**", unsafe_allow_html=True)
@@ -662,9 +686,10 @@ _SETTINGS_SECTIONS = {
     "My projects": _render_projects_section,
     "Team": _render_team_section,
     "Categories": _render_categories_section,
+    "TOIL / Flexi": _render_toil_section,
     "Connections": _render_connections_section,
 }
-_ADMIN_ONLY_SECTIONS = {"Team", "Categories", "Connections"}
+_ADMIN_ONLY_SECTIONS = {"Team", "Categories", "TOIL / Flexi", "Connections"}
 
 
 @st.dialog("Settings", width="large", on_dismiss=_dismiss_handler("settings_open"))
@@ -790,6 +815,10 @@ week = lib.get_week_from(viewer["weeks_dict"], current_week)
 locked = week["status"] in ("submitted", "approved")
 is_future_week = current_week > lib.today_monday()
 
+toil_cfg = data.get("toil") or lib.default_toil_config()
+toil_enabled = toil_cfg.get("enabled", False)
+viewer_toil_balance = lib.compute_toil_balance(viewer["weeks_dict"], data["working_week"], toil_cfg) if toil_enabled else 0.0
+
 # ---------------------------------------------------------------------------
 # My Time
 # ---------------------------------------------------------------------------
@@ -832,6 +861,16 @@ if active_tab == "My Time":
         unsafe_allow_html=True,
     )
 
+    if toil_enabled:
+        st.markdown(
+            f"""<div class="ts-card" style="display:flex;align-items:center;gap:10px;margin-top:8px;padding:10px 14px;">
+            <div class="ts-mono" style="font-size:15px;font-weight:700;">{lib.fmt_hours(viewer_toil_balance)}h</div>
+            <div style="font-size:13px;color:{C['text_secondary']};">TOIL / Flexi available
+              <span class="ts-muted">&middot; max {lib.fmt_hours(toil_cfg.get('max_accrual_hours', 0))}h</span></div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
     if week_target == 0:
         wc1, wc2 = st.columns([4, 1])
         wc1.warning("Set your working week to get started — we'll use it to check your hours each week.")
@@ -851,15 +890,26 @@ if active_tab == "My Time":
         add_projects = [p for p in lib.PROJECTS if data["enabled_projects"].get(p["id"], True)
                         and p["id"] not in existing_refs and q in p["name"].lower()]
         add_cats = [c for c in data["categories"] if c["id"] not in existing_refs and q in c["name"].lower()]
+        show_toil_option = (
+            toil_enabled and viewer_toil_balance > 0
+            and lib.TOIL_TAKEN_ID not in existing_refs
+            and q in lib.TOIL_TAKEN_NAME.lower()
+        )
         if add_projects:
             st.caption("PROJECTS")
             for p in add_projects:
                 st.button(p["name"], key=f"addp_{p['id']}", on_click=add_row, args=("project", p["id"], p["name"]), use_container_width=True)
-        if add_cats:
+        if add_cats or show_toil_option:
             st.caption("LEAVE & OTHER")
             for c in add_cats:
                 st.button(c["name"], key=f"addc_{c['id']}", on_click=add_row, args=("category", c["id"], c["name"]), use_container_width=True)
-        if not add_projects and not add_cats:
+            if show_toil_option:
+                st.button(
+                    f"{lib.TOIL_TAKEN_NAME} ({lib.fmt_hours(viewer_toil_balance)}h available)",
+                    key="addc_toil", on_click=add_row, args=("category", lib.TOIL_TAKEN_ID, lib.TOIL_TAKEN_NAME),
+                    use_container_width=True,
+                )
+        if not add_projects and not add_cats and not show_toil_option:
             st.caption("No matches.")
     b2.button("Copy last week's projects", on_click=copy_last_week, disabled=locked)
     b3.button("Fill remaining hours", on_click=fill_remaining, disabled=locked or not week["rows"] or week_target == 0)
@@ -1077,27 +1127,34 @@ elif active_tab == "My Team":
     morgan_week = lib.get_week(data, current_week)
     self_total = lib.week_total(morgan_week)
     self_meta = lib.STATUS_META[morgan_week["status"]]
+    self_toil_balance = lib.compute_toil_balance(data["weeks"], data["working_week"], toil_cfg) if toil_enabled else 0.0
     roster = [{
         "id": "self", "name": "Morgan Lee (You)", "initials": "ML",
         "avatar_bg": C["accent_tint"], "avatar_fg": C["accent_tint_text"],
         "status": self_meta, "status_key": morgan_week["status"], "total": self_total, "target": week_target,
         "submitted_at": morgan_week["submitted_at"], "rows": morgan_week["rows"], "week_ref": morgan_week,
+        "toil_balance": self_toil_balance,
     }]
     for idx, m in enumerate(data["team"]):
         mwk = lib.get_member_week(m, current_week)
         tint, tint_text = lib.AVATAR_TINTS[idx % len(lib.AVATAR_TINTS)]
+        m_toil_balance = lib.compute_toil_balance(m.get("weeks", {}), data["working_week"], toil_cfg) if toil_enabled else 0.0
         roster.append({
             "id": m["id"], "name": m["name"], "initials": lib.initials_of(m["name"]),
             "avatar_bg": tint, "avatar_fg": tint_text,
             "status": lib.STATUS_META[mwk["status"]], "status_key": mwk["status"], "total": lib.week_total(mwk), "target": week_target,
             "submitted_at": mwk["submitted_at"], "rows": mwk["rows"], "week_ref": mwk,
+            "toil_balance": m_toil_balance,
         })
 
     for member in roster:
         with st.container(border=True, key=f"team_roster_row_{member['id']}"):
             c1, c2, c3, c4, c5, c6 = st.columns([0.5, 1.7, 1.1, 1.1, 1.4, 1.2], wrap=False)
             c1.markdown(f"<div style='width:32px;height:32px;border-radius:50%;background:{member['avatar_bg']};color:{member['avatar_fg']};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12.5px;'>{member['initials']}</div>", unsafe_allow_html=True)
-            c2.markdown(f"**{lib.esc(member['name'])}**")
+            name_html = f"**{lib.esc(member['name'])}**"
+            if toil_enabled:
+                name_html += f"  \n<span class='ts-muted' style='font-size:11px;'>TOIL {lib.fmt_hours(member['toil_balance'])}h</span>"
+            c2.markdown(name_html, unsafe_allow_html=True)
             c3.markdown(pill(member["status"]["label"], member["status"]["bg"], member["status"]["fg"]), unsafe_allow_html=True)
             c4.markdown(f"<div class='ts-mono ts-nowrap' style='text-align:right;'>{lib.fmt_hours(member['total'])}/{lib.fmt_hours(member['target'])}h</div>", unsafe_allow_html=True)
             submitted_label = lib.format_submitted_at(member["submitted_at"])
